@@ -9,9 +9,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         munge \
-        libgfortran5 \
-        liblapack3 \
-        libopenblas0-pthread \
         openssh-server \
         python3 \
         python3-pip \
@@ -60,4 +57,7 @@ CMD ["sleep", "infinity"]
 COPY pyproject.toml README.md LICENCE /workspace/kkrunner/
 COPY src /workspace/kkrunner/src
 COPY tests/docker/psij_slurm_test_in_docker.py /workspace/kkrunner/tests/docker/
-RUN pip install --no-build-isolation --no-deps /workspace/kkrunner
+RUN pip wheel --no-build-isolation --no-deps --wheel-dir /tmp/wheels /workspace/kkrunner \
+    && pip install --no-deps /tmp/wheels/kkrunner-*.whl \
+    && rm -rf /workspace/kkrunner/src \
+    && ln -s /opt/venv/bin/kkrunner-remote /usr/local/bin/kkrunner-remote

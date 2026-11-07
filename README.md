@@ -91,6 +91,23 @@ Existing profiles with an explicit `remote_command = ["ase2sprkkr", "remote"]`
 need `remote_command = ["kkrunner", "remote"]` for execution. Profiles using the
 default command select KKRunner automatically.
 
+## Build and test the distribution
+
+```sh
+python -m pip install build
+python -m build
+# Wheel is built from the generated sdist, not directly from the checkout.
+python -m pip install dist/kkrunner-*.whl
+python -m pip check
+# Run from outside the checkout, with no source PYTHONPATH:
+python /path/to/kkrunner/tests/smoke_distribution.py
+```
+
+The source archive includes docs, test package/fixtures and Docker configuration.
+CI builds the distributions, exercises the installed core without ASE, and runs
+the unpacked source archive's tests against the installed wheel on Python 3.9,
+3.12 and 3.14. The Docker test image also executes only the installed artifact.
+
 Use `RunManager` for a project-free store and `ProjectExecutionManager` for
 project-bound runs. The previous ExecutionManager names are compatibility aliases.
 See the architecture document for processing ownership, filesystem identities

@@ -1,0 +1,44 @@
+name: Distribution and runtime
+on: [push, pull_request]
+jobs:
+  distribution:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.9', '3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install build pytest
+      - run: python -m build
+      - name: Install and check built wheel
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          wheel = next(Path('dist').glob('*.whl')).resolve()
+          subprocess.run([sys.executable, '-m', 'pip', 'install', str(wheel)], check=True)
+          PY
+          python -m pip check
+      - name: Exercise installed package outside checkout
+        run: |
+          cd "$RUNNER_TEMP"
+          env -u PYTHONPATH python "$GITHUB_WORKSPACE/tests/smoke_distribution.py"
+      - name: Test unpacked source distribution against installed wheel
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess, sys, tarfile, tempfile
+          archive = next(Path('dist').glob('*.tar.gz')).resolve()
+          directory = Path(tempfile.mkdtemp())
+          with tarfile.open(archive) as source:
+              source.extractall(directory)
+          root = next(directory.iterdir())
+          assert (root / 'tests/conftest.py').is_file()
+          assert (root / 'tests/__init__.py').is_file()
+          assert (root / 'tests/docker/Dockerfile').is_file()
+          assert (root / 'docs/architecture.md').is_file()
+          subprocess.run([sys.executable, '-m', 'pytest', '-q'], cwd=root, check=True)
+          PY

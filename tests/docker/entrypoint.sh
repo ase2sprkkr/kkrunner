@@ -29,10 +29,8 @@ chown -R tester:tester /home/tester/.config /home/tester/.ssh
 
 cat > /usr/local/bin/kkrunner <<'SH'
 #!/bin/sh
-# Source checkouts mount the repository and need ``src`` on PYTHONPATH, while
-# installed-wheel tests mount site-packages directly. Keep both layouts valid.
-export PYTHONPATH=/workspace/kkrunner/src:/workspace/kkrunner${PYTHONPATH:+:$PYTHONPATH}
-exec /opt/venv/bin/python -m kkrunner "$@"
+# Exercise the installed distribution without source paths.
+exec /opt/venv/bin/kkrunner "$@"
 SH
 chmod 0755 /usr/local/bin/kkrunner
 
