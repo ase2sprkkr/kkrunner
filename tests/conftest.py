@@ -1,0 +1,31 @@
+"""Keep process-local executor pools isolated between tests."""
+
+import pytest
+from kkrunner import pool
+
+
+@pytest.fixture(autouse=True)
+def isolated_default_executor_pool():
+    previous = pool._DEFAULT_EXECUTOR_POOL
+    pool._DEFAULT_EXECUTOR_POOL = pool.ExecutorPool()
+    try:
+        yield
+    finally:
+        pool._DEFAULT_EXECUTOR_POOL.close()
+        pool._DEFAULT_EXECUTOR_POOL = previous
+
+
+@pytest.fixture(scope="session")
+def docker_execution_image():
+    from pathlib import Path
+    import shutil
+    import subprocess
+    from types import SimpleNamespace
+
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker is required for scheduler integration")
+    root = Path(__file__).resolve().parents[1]
+    name = "kkrunner-execution-test"
+    subprocess.run([docker, "build", "-f", str(root / "tests/docker/Dockerfile"), "-t", name, str(root)], check=True)
+    return SimpleNamespace(docker=docker, repository=root, image=name)

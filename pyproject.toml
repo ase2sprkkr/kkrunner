@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kkrunner"
+version = "0.1.0.dev0"
+description = "Program-independent local and remote scientific job execution"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENCE"}
+dependencies = ["platformdirs"]
+
+[project.optional-dependencies]
+psij = ["psij-python>=0.9.11"]
+test = ["pytest"]
+
+[project.scripts]
+kkrunner = "kkrunner.cli:main"
+kkrunner-remote = "kkrunner.cli:remote_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: slow integration tests", "integration: external services required"]
+
+[tool.ruff]
+line-length = 120
