@@ -55,7 +55,10 @@ assert manager.store.get(run.id).state.value == 'finished'
 callback is optional; when supplied it receives an `ExecutionOutcome` and may
 return any Python object. To defer processing, create a run with
 `processing_required=True`, then supply `process_result=` on a later attach.
-Without that callback the durable state remains `postprocessing`.
+Without that callback the durable state remains `postprocessing` and `wait()`
+raises `ProcessingPending`. The same exception tells an application observer
+that another client owns/already performed processing; load the historical
+application result instead of treating a raw outcome as a parsed result.
 
 `manager.retry_postprocessing(run_id, callback)` retries failed/interrupted
 processing against the captured files without submitting another process.
@@ -87,3 +90,8 @@ with their respective applications.
 Existing profiles with an explicit `remote_command = ["ase2sprkkr", "remote"]`
 need `remote_command = ["kkrunner", "remote"]` for execution. Profiles using the
 default command select KKRunner automatically.
+
+Use `RunManager` for a project-free store and `ProjectExecutionManager` for
+project-bound runs. The previous ExecutionManager names are compatibility aliases.
+See the architecture document for processing ownership, filesystem identities
+and the Linux requirement for managed local execution.

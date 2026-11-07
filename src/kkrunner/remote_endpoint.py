@@ -15,6 +15,7 @@ from uuid import uuid4
 from .base import materialize_output_streams
 from .base import (
     ExecutionSpec,
+    ExecutionResources,
     start_monitor,
     Executor,
     FailurePhase,
@@ -43,8 +44,7 @@ def _relative_local_path(path, local_root):
         return path.relative_to(root)
     except ValueError as exc:
         raise ValueError(
-            f"Local path {path} is outside mapped root {root}; "
-            "specify local_root/remote_root explicitly"
+            f"Local path {path} is outside mapped root {root}; specify local_root/remote_root explicitly"
         ) from exc
 
 
@@ -84,6 +84,8 @@ class _RemoteRun(RemoteRunner):
         super().__init__(*args, **kwargs)
         self._run_id = run_id
         self._prepared = None
+        self._path_spec = None
+        self._output_resources = ExecutionResources()
 
     async def _monitor(self):
         result = await super()._monitor()
@@ -93,8 +95,7 @@ class _RemoteRun(RemoteRunner):
         # A broken follow connection can leave either channel incomplete even
         # when the backend finished successfully. Verify both physical files.
         checked = set()
-        for kind, entry in (("stdout", self.files.stdout),
-                            ("stderr", self.files.stderr)):
+        for kind, entry in (("stdout", self.files.stdout), ("stderr", self.files.stderr)):
             if entry is None or entry.local_path is None or entry.remote_path is None:
                 continue
             local = entry.local_path
@@ -104,20 +105,15 @@ class _RemoteRun(RemoteRunner):
             try:
                 signature = await self.executor.transport.file_signature(entry.remote_path)
                 if signature is None:
-                    raise FileNotFoundError(
-                        f"Remote {kind} output is missing: {entry.remote_path}"
-                    )
+                    raise FileNotFoundError(f"Remote {kind} output is missing: {entry.remote_path}")
                 stat = os.stat(local)
                 if stat.st_size != signature[0]:
                     raise RuntimeError(
-                        f"Streamed local {kind} size does not match the "
-                        f"authoritative remote output: {local}"
+                        f"Streamed local {kind} size does not match the authoritative remote output: {local}"
                     )
                 remote_digest = await self.executor.transport.file_digest(entry.remote_path)
                 if remote_digest is None or file_digest(local) != remote_digest:
-                    raise RuntimeError(
-                        f"Streamed local {kind} contents differ from remote output: {local}"
-                    )
+                    raise RuntimeError(f"Streamed local {kind} contents differ from remote output: {local}")
                 if await self.executor.transport.file_signature(entry.remote_path) != signature:
                     raise RuntimeError(f"Remote {kind} output changed during verification")
 
@@ -154,12 +150,21 @@ class _RemoteRun(RemoteRunner):
         )
         return replace(
             local,
-            inputs=inputs, outputs=outputs, caches=tuple(caches),
-            stdout=None if local.stdout is None else replace(
-                local.stdout, remote_path=sync.get("output_file"),
+            inputs=inputs,
+            outputs=outputs,
+            caches=tuple(caches),
+            stdin=None if local.stdin is None else await mapped(local.stdin),
+            stdout=None
+            if local.stdout is None
+            else replace(
+                local.stdout,
+                remote_path=sync.get("output_file"),
             ),
-            stderr=None if local.stderr is None else replace(
-                local.stderr, remote_path=sync.get("error_file"),
+            stderr=None
+            if local.stderr is None
+            else replace(
+                local.stderr,
+                remote_path=sync.get("error_file"),
             ),
             mapping=mapping,
         )
@@ -193,18 +198,27 @@ class _RemoteRun(RemoteRunner):
             if self._prepared is not None:
                 return
             request, manifest = _run_sync(self._prepare_async())
-            self.spec = materialize_output_streams(self.spec)
             self._prepared = (request, manifest)
             self._remote_directory = request["directory"]
             self._files = manifest
 
     async def _submit_async(self):
+        if self._path_spec is not None:
+            self.spec = self._path_spec
         if self._prepared is None:
             request, manifest = await self._prepare_async()
-            self.spec = materialize_output_streams(self.spec)
         else:
             request, manifest = self._prepared
 
+        self._path_spec = self._path_spec or self.spec
+        self.spec = materialize_output_streams(self._path_spec)
+        self._output_resources = ExecutionResources(
+            *(
+                getattr(self.spec, name)
+                for name in ("output_file", "error_file")
+                if isinstance(getattr(self._path_spec, name), (str, os.PathLike))
+            )
+        )
         request["detached"] = self._run_id is not None
         status = await self.executor._submit(request)
         remote_id = status.get("remote_id")
@@ -216,7 +230,11 @@ class _RemoteRun(RemoteRunner):
         with self._lock:
             if self._state != RunState.NEW:
                 raise RuntimeError(f"Run is already {self._state.value}")
-            remote_id, manifest, status, request = _run_sync(self._submit_async())
+            try:
+                remote_id, manifest, status, request = _run_sync(self._submit_async())
+            except BaseException:
+                self._output_resources.close(suppress_errors=True)
+                raise
             self._state = RunState(status["state"])
             self._apply_backend_facts(status)
             self._backend_id = str(remote_id)
@@ -236,9 +254,7 @@ class _RemoteRunContext:
         self.command = endpoint.command
         self.computer = endpoint.computer
         self.local_root = Path(launch.local_root or Path.home()).expanduser().resolve()
-        self.remote_root = (
-            None if launch.remote_root is None else os.fspath(launch.remote_root)
-        )
+        self.remote_root = None if launch.remote_root is None else os.fspath(launch.remote_root)
         self.input_files = FileSyncPolicy(launch.input_sync)
         self.output_files = FileSyncPolicy(launch.output_sync)
 
@@ -271,9 +287,7 @@ class _RemoteRunContext:
         try:
             common = posixpath.commonpath((remote_root, path))
         except ValueError as exc:
-            raise ValueError(
-                f"Remote path {path} is outside mapped root {remote_root}"
-            ) from exc
+            raise ValueError(f"Remote path {path} is outside mapped root {remote_root}") from exc
         if common != remote_root:
             raise ValueError(f"Remote path {path} is outside mapped root {remote_root}")
         relative = posixpath.relpath(path, remote_root)
@@ -297,7 +311,10 @@ class _RemoteRunContext:
 
     async def _follow(self, directory, backend_id, files=None, *, offsets=None):
         return await self.endpoint._follow(
-            directory, backend_id, files, offsets=offsets,
+            directory,
+            backend_id,
+            files,
+            offsets=offsets,
         )
 
     def create_run(self, spec, callback=None, *, run_id=None):
@@ -342,8 +359,7 @@ class _RemoteRunContext:
                     cache_targets[os.fspath(local)] = (remote, before)
 
         with ExitStack() as streams:
-            output_file = (None if output_local is None else
-                           streams.enter_context(open(output_local, "ab")))
+            output_file = None if output_local is None else streams.enter_context(open(output_local, "ab"))
             if error_local is None:
                 error_file = None
             elif error_local == output_local:
@@ -398,10 +414,12 @@ class RemoteEndpointExecutor(Executor):
         backend="local",
         backend_options=None,
         command=("kkrunner", "remote"),
+        filesystem_id=None,
     ):
         if backend not in _REMOTE_BACKENDS:
             raise ValueError(f"Unsupported remote executor: {backend!r}")
         self.transport = transport
+        self.filesystem_id = filesystem_id
         self.backend = backend
         self.backend_options = dict(backend_options or {})
         self.command = tuple(command)
@@ -443,8 +461,10 @@ class RemoteEndpointExecutor(Executor):
         if mapping is None:
             raise ValueError("Remote run has no persisted file mapping")
         return LaunchSpec(
-            local_root=mapping.local_root, remote_root=mapping.remote_root,
-            input_sync=mapping.input_sync, output_sync=mapping.output_sync,
+            local_root=mapping.local_root,
+            remote_root=mapping.remote_root,
+            input_sync=mapping.input_sync,
+            output_sync=mapping.output_sync,
         )
 
     async def _resolve_submission_directory(self, directory):
@@ -458,7 +478,8 @@ class RemoteEndpointExecutor(Executor):
     def submission_directory(self, spec):
         launch = spec.launch
         relative = _relative_local_path(
-            spec.directory, launch.local_root or Path.home(),
+            spec.directory,
+            launch.local_root or Path.home(),
         )
 
         root = launch.remote_root
@@ -474,18 +495,50 @@ class RemoteEndpointExecutor(Executor):
             return remote_root
         return posixpath.join(remote_root, *PurePosixPath(*relative.parts).parts)
 
+    def resolve_submission(self, record, spec):
+        """Resolve the footprint without uploads, mkdir, or opening output files."""
+
+        async def resolve():
+            context = self._context(self, spec.launch)
+            directory = await context.map_directory(spec.directory)
+
+            async def mapped(entry):
+                if entry is None or entry.local_path is None:
+                    return entry
+                return replace(entry, remote_path=await context.map_path(entry.local_path))
+
+            files = record.files
+            files = replace(
+                files,
+                inputs=tuple([await mapped(entry) for entry in files.inputs]),
+                outputs=tuple([await mapped(entry) for entry in files.outputs]),
+                caches=tuple([replace(cache, file=await mapped(cache.file)) for cache in files.caches]),
+                stdin=await mapped(files.stdin),
+                stdout=await mapped(files.stdout),
+                stderr=await mapped(files.stderr),
+                mapping=FileMapping(
+                    local_root=str(context.local_root),
+                    remote_root=await context._resolved_remote_root(),
+                    input_sync=context.input_files.value,
+                    output_sync=context.output_files.value,
+                ),
+            )
+            return replace(
+                record,
+                files=files,
+                execution=replace(
+                    record.execution,
+                    directory=WorkingDirectory(record.execution.directory.local, directory),
+                ),
+            )
+
+        return _run_sync(resolve())
+
     async def _submit(self, request):
         launch = request.get("launch") or {}
         mpi = launch.get("mpi") or {}
-        if (
-            self.backend == "local"
-            and mpi.get("autodetect")
-            and not mpi.get("required")
-            and mpi.get("warning", True)
-        ):
-            resolved = await self._json_request(
-                "resolve-mpi", payload={"mpi": "auto"}
-            )
+        if self.backend == "local" and mpi.get("autodetect") and not mpi.get("required") and mpi.get("warning", True):
+            resolved = await self._json_request("resolve-mpi", payload={"mpi": "auto"})
             if not resolved.get("mpi"):
                 warnings.warn(
                     "MPI autodetection did not find an MPI launcher on the remote "
@@ -493,9 +546,7 @@ class RemoteEndpointExecutor(Executor):
                     MpiNotFoundWarning,
                     stacklevel=3,
                 )
-        return await self._json_request(
-            "submit", request["directory"], payload=request
-        )
+        return await self._json_request("submit", request["directory"], payload=request)
 
     async def _status(self, directory, backend_id, files=None):
         return await self._json_request("status", backend_id)
@@ -510,16 +561,13 @@ class RemoteEndpointExecutor(Executor):
                 options.extend(("--stdout-path", files.stdout.remote_path))
             if files.stderr and files.stderr.remote_path:
                 options.extend(("--stderr-path", files.stderr.remote_path))
-        for kind, option in (("out", "--stdout-offset"),
-                             ("err", "--stderr-offset")):
+        for kind, option in (("out", "--stdout-offset"), ("err", "--stderr-offset")):
             offset = None if offsets is None else offsets.get(kind)
             if offset is not None:
                 options.extend((option, str(offset)))
             elif offsets is not None:
                 options.append("--live-" + ("stdout" if kind == "out" else "stderr"))
-        process = await self.transport.start(
-            self._control_command("follow", str(backend_id), *options, "--framed")
-        )
+        process = await self.transport.start(self._control_command("follow", str(backend_id), *options, "--framed"))
         return FramedRunningCommand(process)
 
     def acknowledge_submission(self, run):
@@ -541,12 +589,13 @@ class RemoteEndpointExecutor(Executor):
             result = []
             for run in runs:
                 execution = run.execution
-                state = await self._status(
-                    execution.directory.remote, execution.backend_id, run.files
+                state = await self._status(execution.directory.remote, execution.backend_id, run.files)
+                result.append(
+                    _remote_status_from_facts(
+                        state,
+                        execution.backend_id,
+                    )
                 )
-                result.append(_remote_status_from_facts(
-                    state, execution.backend_id,
-                ))
             return tuple(result)
 
         return _run_sync(query())
@@ -566,9 +615,7 @@ class RemoteEndpointExecutor(Executor):
         if state is None:
             return None
         if state.get("unsupported"):
-            raise NotImplementedError(
-                state.get("error") or "Remote recovery unsupported"
-            )
+            raise NotImplementedError(state.get("error") or "Remote recovery unsupported")
         remote_id = state.get("remote_id")
         if not remote_id:
             raise RuntimeError("Recovered remote submission has no remote_id")
@@ -576,50 +623,55 @@ class RemoteEndpointExecutor(Executor):
         execution = submission.execution.submitted(remote_id)
         target_directory = state.get("directory") or directory
         execution = replace(
-            execution, directory=WorkingDirectory(
-                execution.directory.local, target_directory,
+            execution,
+            directory=WorkingDirectory(
+                execution.directory.local,
+                target_directory,
             ),
         )
         files = submission.files.with_remote_stream_paths(
-            stdout=state.get("output_file"), stderr=state.get("error_file"),
+            stdout=state.get("output_file"),
+            stderr=state.get("error_file"),
         )
         return _remote_status_from_facts(
-            state, str(remote_id), execution=execution, files=files,
+            state,
+            str(remote_id),
+            execution=execution,
+            files=files,
         )
 
     def recover_submission(self, run_id, submission, *, submitted_at=None):
-        return _run_sync(
-            self._recover_submission(
-                run_id, submission, submitted_at=submitted_at
-            )
-        )
+        return _run_sync(self._recover_submission(run_id, submission, submitted_at=submitted_at))
 
     def create_run(self, spec, callback=None):
         return self._context(self, spec.launch).create_run(spec, callback=callback)
 
     def create_project_run(self, spec, *, run_id, callback=None):
-        return self._context(self, spec.launch).create_run(
-            spec, callback=callback, run_id=run_id
-        )
+        return self._context(self, spec.launch).create_run(spec, callback=callback, run_id=run_id)
 
     async def _fetch_result_files(self, run, files, *, destinations=None):
         self._validate_run(run)
         context = self._context(self, self._launch_from_manifest(run.files))
         remote_root = await context._resolved_remote_root()
-        destinations = {} if destinations is None else {
-            os.path.abspath(os.fspath(path)): os.fspath(target)
-            for path, target in destinations.items()
-        }
+        destinations = (
+            {}
+            if destinations is None
+            else {os.path.abspath(os.fspath(path)): os.fspath(target) for path, target in destinations.items()}
+        )
         for value in files:
             local = os.path.abspath(os.fspath(value))
             entry = next(
-                (item for item in (
-                    *run.files.inputs,
-                    *run.files.outputs,
-                    *(cache.file for cache in run.files.caches),
-                    run.files.stdout,
-                    run.files.stderr,
-                ) if item is not None and item.local_path == local),
+                (
+                    item
+                    for item in (
+                        *run.files.inputs,
+                        *run.files.outputs,
+                        *(cache.file for cache in run.files.caches),
+                        run.files.stdout,
+                        run.files.stderr,
+                    )
+                    if item is not None and item.local_path == local
+                ),
                 None,
             )
             remote = entry.remote_path if entry is not None else None
@@ -628,28 +680,37 @@ class RemoteEndpointExecutor(Executor):
             # Exact paths and wildcards have the same source-side selection
             # and use the transport's verified single-file download.
             for matched in await self.transport.expand_files(remote, remote_root):
-                destination = (
-                    os.fspath(await context.unmap_path(matched))
-                    if glob.has_magic(remote) else local
-                )
+                destination = os.fspath(await context.unmap_path(matched)) if glob.has_magic(remote) else local
                 _relative_local_path(destination, context.local_root)
                 target = destinations.get(destination, destination)
                 if not os.path.isfile(target):
                     await self.transport.get_file(matched, target)
 
     def fetch_result_files(self, run, files, *, destinations=None):
-        return _run_sync(self._fetch_result_files(
-            run, files, destinations=destinations,
-        ))
+        return _run_sync(
+            self._fetch_result_files(
+                run,
+                files,
+                destinations=destinations,
+            )
+        )
 
     async def _attach(self, run, callback=None, output_listener=None, start=True):
         self._validate_run(run)
         launch = self._launch_from_manifest(run.files)
         return await self._context(self, launch).attach(
-            run, callback=callback, output_listener=output_listener, start=start,
+            run,
+            callback=callback,
+            output_listener=output_listener,
+            start=start,
         )
 
     def attach(self, run, callback=None, output_listener=None, start=True):
-        return _run_sync(self._attach(
-            run, callback=callback, output_listener=output_listener, start=start,
-        ))
+        return _run_sync(
+            self._attach(
+                run,
+                callback=callback,
+                output_listener=output_listener,
+                start=start,
+            )
+        )

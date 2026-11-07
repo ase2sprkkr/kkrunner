@@ -8,6 +8,7 @@ from kkrunner.manager import ExecutionManager
 def _record(tmp_path):
     manager = ExecutionManager(RunStore(tmp_path / "runs"))
     record = manager.new_record(
+        remote_directory="/remote",
         directory=tmp_path,
         files=FileManifest(stdout=FileEntry(local_path=str(tmp_path / "run.out"), availability_state="pending")),
         metadata={"test": {"task": "DOS"}},

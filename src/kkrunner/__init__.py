@@ -5,6 +5,8 @@ from .file_versions import FileState, FileVersion, FileVersionCaptureError
 from .task_file import TaskFile
 from .base import (
     ExecutionOutcome,
+    BackendRunner,
+    ManagedRunner,
     ExecutionResources,
     ExecutionSpec,
     Executor,
@@ -30,6 +32,7 @@ from .manager import (
     ProjectRunner,
     RunRecord,
     RunStore,
+    RunManager,
 )
 from .pool import ExecutorPool, default_executor_pool
 from .postprocessing import PostprocessingRunner, ProcessingPending
@@ -41,7 +44,7 @@ from .projects import (
     ProjectRepositoryError,
     default_projects_directory,
 )
-from .project_manager import ExecutionManager
+from .project_manager import ExecutionManager, ProjectExecutionManager
 from .psij import PsijExecutor, PsijRunner
 from .remote import FileSyncPolicy, RemoteRunner
 from .remote_endpoint import RemoteEndpointExecutor
@@ -69,6 +72,8 @@ __all__ = [
     "PostprocessingRunner",
     "ResourceOwnedRunner",
     "Runner",
+    "BackendRunner",
+    "ManagedRunner",
     "RunState",
     "RunStatus",
     "DuplicateSubmissionError",
@@ -80,6 +85,8 @@ __all__ = [
     "RunStore",
     "CorruptRunRecord",
     "ExecutionManager",
+    "RunManager",
+    "ProjectExecutionManager",
     "ProjectRunner",
     "Project",
     "ProjectRepository",

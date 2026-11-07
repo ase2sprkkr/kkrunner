@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from threading import Event, Lock, Thread
 
-from .base import (FailurePhase, RunState, finish_monitor, wait_for_monitor)
+from .base import FailurePhase, RunState, finish_monitor, wait_for_monitor
 
 
 class ProcessingPending(RuntimeError):
@@ -30,6 +30,7 @@ class PostprocessingRunner:
         self._failure_phase = None
         self._failure_message = None
         self._exception = None
+        self._pending_exception = None
         self._callback_exception = None
         self._started = False
         self._processing = False
@@ -54,11 +55,11 @@ class PostprocessingRunner:
 
     @property
     def execution(self):
-        return getattr(self._runner, 'execution', None)
+        return getattr(self._runner, "execution", None)
 
     @property
     def files(self):
-        return getattr(self._runner, 'files', None)
+        return getattr(self._runner, "files", None)
 
     @property
     def exception(self):
@@ -105,33 +106,25 @@ class PostprocessingRunner:
             if raw_state == RunState.FAILED:
                 self.result = outcome
                 self._state = RunState.FAILED
-                self._failure_phase = (
-                    getattr(self._runner, "failure_phase", None)
-                    or FailurePhase.EXECUTION
-                )
-                self._failure_message = getattr(
-                    self._runner, "failure_message", None
-                )
+                self._failure_phase = getattr(self._runner, "failure_phase", None) or FailurePhase.EXECUTION
+                self._failure_message = getattr(self._runner, "failure_message", None)
                 return
             if raw_state == RunState.UNKNOWN:
                 self.result = outcome
                 self._state = RunState.UNKNOWN
                 # An unresolved backend may still be executing. It is
                 # recoverable and must not finalize as a failed project run.
-                self._failure_message = getattr(
-                    self._runner, "failure_message", None
-                )
+                self._failure_message = getattr(self._runner, "failure_message", None)
                 return
             if raw_state != RunState.FINISHED:
-                raise RuntimeError(
-                    f"Raw runner completed wait() in unexpected state {raw_state.value}"
-                )
+                raise RuntimeError(f"Raw runner completed wait() in unexpected state {raw_state.value}")
 
             self._processing = True
             try:
                 self.result = outcome if self._process_result is None else self._process_result(outcome)
-            except ProcessingPending:
-                self.result = outcome
+            except ProcessingPending as exc:
+                self._pending_exception = exc
+                self.result = None
                 self._state = RunState.POSTPROCESSING
                 return
             except BaseException as exc:
@@ -145,13 +138,8 @@ class PostprocessingRunner:
             self._state = RunState.FINISHED
         except BaseException as exc:
             self._exception = exc
-            self._failure_phase = (
-                getattr(self._runner, "failure_phase", None)
-                or FailurePhase.EXECUTION
-            )
-            self._failure_message = (
-                getattr(self._runner, "failure_message", None) or str(exc)
-            )
+            self._failure_phase = getattr(self._runner, "failure_phase", None) or FailurePhase.EXECUTION
+            self._failure_message = getattr(self._runner, "failure_message", None) or str(exc)
             # A failed wait() can itself mean that the backend is unreachable.
             # Never replace the original error by a second status-query error.
             try:
@@ -200,7 +188,10 @@ class PostprocessingRunner:
     def wait(self):
         if not self._started:
             raise RuntimeError("Run has not been started")
-        return wait_for_monitor(self)
+        result = wait_for_monitor(self)
+        if self._pending_exception is not None:
+            raise self._pending_exception
+        return result
 
     def run(self):
         if not self._started:
@@ -216,9 +207,7 @@ class PostprocessingRunner:
         """Stop this client's monitor; leave the backend calculation intact."""
         stop = getattr(self._runner, "stop_observation", None)
         if stop is None:
-            raise NotImplementedError(
-                "This execution backend cannot detach its observation"
-            )
+            raise NotImplementedError("This execution backend cannot detach its observation")
         return stop()
 
     def cancel(self):

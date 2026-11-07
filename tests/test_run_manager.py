@@ -134,6 +134,7 @@ def test_completion_postprocesses_only_successful_execution(tmp_path, return_cod
         metadata={"test": {"task": "DOS"}},
     )
     run.submit()
+    (tmp_path / "case.out").write_text("result")
     executor.runners[0].finish(return_code)
     result = run.wait()
     assert result.return_code == return_code

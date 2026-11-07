@@ -188,6 +188,8 @@ def _clean_request_outputs(spec, directory, output_path=None, error_path=None):
 
 
 def _local_submit(request):
+    if not sys.platform.startswith("linux"):
+        raise SubmissionNotStarted("Managed local execution requires Linux /proc and Unix sockets")
     from .local import materialize_local_spec
 
     # Everything here happens before launching a supervisor. A failed local

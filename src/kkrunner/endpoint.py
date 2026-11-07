@@ -24,9 +24,12 @@ class ExecutorEndpoint:
     psij_backend: Any = None
     psij_url: Any = None
     ssh_zstd: bool = False
+    filesystem_id: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "executor", str(self.executor or "local"))
+        if self.filesystem_id is not None and (not isinstance(self.filesystem_id, str) or not self.filesystem_id):
+            raise TypeError("filesystem_id must be a nonempty string or None")
         for name in ("ssh_options", "remote_command"):
             value = getattr(self, name)
             if value is None:
@@ -37,11 +40,23 @@ class ExecutorEndpoint:
                 value = tuple(value)
             object.__setattr__(self, name, value)
 
+        for name in ("host", "psij_backend", "psij_url"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"ExecutorEndpoint.{name} must be a string or None")
+        for name in ("ssh_options", "remote_command"):
+            if any(not isinstance(item, str) for item in getattr(self, name)):
+                raise TypeError(f"ExecutorEndpoint.{name} must contain strings")
+        if type(self.ssh_zstd) is not bool:
+            raise TypeError("ExecutorEndpoint.ssh_zstd must be a bool")
+
         # Identity describes the backend actually constructed below. Irrelevant
         # profile fields must not split its pool key or collision namespace.
         if self.executor in ("local", "psij"):
             for name, value in (
-                ("host", None), ("ssh_options", ()), ("remote_command", ()),
+                ("host", None),
+                ("ssh_options", ()),
+                ("remote_command", ()),
                 ("ssh_zstd", False),
             ):
                 object.__setattr__(self, name, value)
@@ -97,6 +112,7 @@ def endpoint_for_executor(executor) -> ExecutorEndpoint:
                 ),
                 host=getattr(transport, "host", None),
                 remote_command=executor.command,
+                filesystem_id=executor.filesystem_id,
                 psij_backend=psij_backend,
                 psij_url=psij_url,
             )
@@ -106,6 +122,7 @@ def endpoint_for_executor(executor) -> ExecutorEndpoint:
             ssh_options=transport.options,
             ssh_zstd=transport.zstd,
             remote_command=executor.command,
+            filesystem_id=executor.filesystem_id,
             psij_backend=psij_backend,
             psij_url=psij_url,
         )
@@ -152,10 +169,11 @@ def create_executor_from_endpoint(endpoint: ExecutorEndpoint):
             }
         return RemoteEndpointExecutor(
             SshTransport(
-                endpoint.host, options=endpoint.ssh_options, zstd=endpoint.ssh_zstd,
+                endpoint.host,
+                options=endpoint.ssh_options,
+                zstd=endpoint.ssh_zstd,
             ),
+            filesystem_id=endpoint.filesystem_id,
             **kwargs,
         )
-    raise ValueError(
-        f"Cannot reconstruct unsupported execution endpoint {endpoint.executor!r}"
-    )
+    raise ValueError(f"Cannot reconstruct unsupported execution endpoint {endpoint.executor!r}")

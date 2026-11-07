@@ -15,6 +15,7 @@ from threading import Event, Lock, RLock
 
 from .file_availability import discover_local_files, clear_declared_outputs, validate_output_collisions
 from .growing_file_tail import follow_growing_files
+from .run_model import FileManifest
 from .base import (
     ExecutionOutcome,
     ExecutionSpec,
@@ -402,7 +403,13 @@ class PsijRunner:
     def _update_files(self):
         if self._files is None:
             return
-        self._files = discover_local_files(self._files)
+        self._files = discover_local_files(
+            self._files, require_outputs=self._observed_state == RunState.FINISHED,
+        )
+        if self._observed_state == RunState.FINISHED and self._files.failed_artifacts:
+            self._observed_state = RunState.FAILED
+            self._failure_phase = FailurePhase.ARTIFACTS
+            self._failure_message = self._files.availability_message
 
     @property
     def backend_id(self):
@@ -644,7 +651,9 @@ class PsijExecutor(Executor):
         self._max_idle_jobs = 64
 
     def create_run(self, spec: ExecutionSpec, callback=None):
-        return PsijRunner(self, spec, callback=callback)
+        runner = PsijRunner(self, spec, callback=callback)
+        runner.set_manifest(FileManifest.from_spec(spec))
+        return runner
 
     def create_project_run(
         self, spec: ExecutionSpec, *, run_id, callback=None

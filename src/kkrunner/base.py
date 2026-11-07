@@ -9,8 +9,8 @@ import warnings
 from concurrent.futures import Future
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
-from threading import Event, Lock, Thread
-from typing import Any, Optional, Protocol, Sequence, Tuple
+from threading import Event, Lock, Thread, current_thread
+from typing import Any, Optional, Protocol, Sequence, Tuple, TypeVar
 
 from .decorators import class_property
 from .run_model import Execution, FileManifest, FileSyncPolicy
@@ -76,8 +76,7 @@ def declared_file_paths(values, directory, *, excluded=(), flush=False):
         previous = merged.get(path)
         if previous is not None and previous != required:
             raise ValueError(
-                f"Conflicting optionality for file {path}: "
-                "the same input cannot be both required and optional"
+                f"Conflicting optionality for file {path}: the same input cannot be both required and optional"
             )
         merged[path] = required
     return tuple(merged.items())
@@ -167,7 +166,10 @@ def wait_for_monitor(runner):
         if runner._state == RunState.NEW:
             raise RuntimeError("Run has not been submitted")
         raise RuntimeError("Attached run has not been started")
-    runner._done.wait()
+    # The monitor delivers its callback before waking ordinary waiters. The
+    # callback may inspect its own result without waiting for itself to return.
+    if current_thread() is not runner._thread:
+        runner._done.wait()
     if runner._exception is not None:
         raise runner._exception
     if runner._callback_exception is not None:
@@ -209,9 +211,7 @@ class OutputObservers:
         if not data:
             return
         with self._lock:
-            decoder = self._decoders.setdefault(
-                kind, codecs.getincrementaldecoder("utf8")(errors="replace")
-            )
+            decoder = self._decoders.setdefault(kind, codecs.getincrementaldecoder("utf8")(errors="replace"))
             text = decoder.decode(data)
         if text:
             self.emit(text, kind)
@@ -219,10 +219,7 @@ class OutputObservers:
     def finish_bytes(self):
         """Flush incomplete UTF-8 sequences once at the end of observation."""
         with self._lock:
-            pending = [
-                (kind, decoder.decode(b"", final=True))
-                for kind, decoder in self._decoders.items()
-            ]
+            pending = [(kind, decoder.decode(b"", final=True)) for kind, decoder in self._decoders.items()]
             self._decoders.clear()
         for kind, text in pending:
             if text:
@@ -253,8 +250,7 @@ class OutputObservers:
                         handler(callback, exc)
                     except Exception as handler_exc:
                         warnings.warn(
-                            f"Output observer error handler {handler!r} failed: "
-                            f"{handler_exc}",
+                            f"Output observer error handler {handler!r} failed: {handler_exc}",
                             OutputObserverWarning,
                             stacklevel=4,
                         )
@@ -324,6 +320,7 @@ class ExecutionResources:
 
         _close_distinct(resources, suppress_errors=suppress_errors)
 
+
 class ResourceOwnedRunner:
     """Runner proxy owning resources and the public submit/cancel boundary."""
 
@@ -359,7 +356,11 @@ class ResourceOwnedRunner:
         return self._runner.exception
 
     def _release_after_failure(self):
-        if self.state == RunState.NEW or self.state.is_terminal:
+        # submit() calls this while holding _submission_lock. Read backend
+        # state directly: our public state property takes that same lock when
+        # cancellation has arrived, and would deadlock the submission thread.
+        state = self._runner.state
+        if state == RunState.NEW or state.is_terminal:
             self._resources.close(suppress_errors=True)
 
     def _raise_if_cancelled_before_submit(self):
@@ -436,9 +437,7 @@ class ResourceOwnedRunner:
             return
         state = self.state
         if state != RunState.NEW and not state.is_terminal:
-            raise RuntimeError(
-                f"Cannot close execution resources while run is {state.value}"
-            )
+            raise RuntimeError(f"Cannot close execution resources while run is {state.value}")
         self._resources.close()
 
     def add_output_listener(self, callback):
@@ -463,12 +462,8 @@ class RunStatus:
     def __post_init__(self):
         if not isinstance(self.state, RunState):
             object.__setattr__(self, "state", RunState(self.state))
-        if self.failure_phase is not None and not isinstance(
-            self.failure_phase, FailurePhase
-        ):
-            object.__setattr__(
-                self, "failure_phase", FailurePhase(self.failure_phase)
-            )
+        if self.failure_phase is not None and not isinstance(self.failure_phase, FailurePhase):
+            object.__setattr__(self, "failure_phase", FailurePhase(self.failure_phase))
 
 
 @dataclass(frozen=True)
@@ -482,9 +477,7 @@ class MpiSpec:
     warning: bool = True
 
     def __post_init__(self):
-        object.__setattr__(
-            self, "launcher", tuple(os.fspath(part) for part in self.launcher)
-        )
+        object.__setattr__(self, "launcher", tuple(os.fspath(part) for part in self.launcher))
         if self.process_count is not None and self.process_count < 1:
             raise ValueError("process_count must be positive")
         if self.launcher and self.autodetect:
@@ -585,6 +578,7 @@ class LaunchSpec:
 
 def _pathlike(value):
     from .task_file import TaskFile
+
     if isinstance(value, TaskFile):
         return value
     if isinstance(value, os.PathLike):
@@ -643,10 +637,13 @@ class ExecutionSpec:
         }
 
 
-class Runner(Protocol):
+ResultT = TypeVar("ResultT")
+
+
+class Runner(Protocol[ResultT]):
     """One concrete calculation run."""
 
-    result: Any
+    result: ResultT
 
     @property
     def state(self) -> RunState: ...
@@ -658,11 +655,32 @@ class Runner(Protocol):
     def exception(self) -> Optional[BaseException]: ...
 
     def submit(self) -> None: ...
-    def wait(self) -> Any: ...
-    def run(self) -> Any: ...
+    def wait(self) -> ResultT: ...
+    def run(self) -> ResultT: ...
     def cancel(self) -> None: ...
     def add_output_listener(self, callback) -> None: ...
     def add_output_error_listener(self, callback) -> None: ...
+
+
+class BackendRunner(Runner[ExecutionOutcome], Protocol):
+    """Raw execution plus facts consumed by persistent orchestration."""
+
+    spec: ExecutionSpec
+    files: Optional[FileManifest]
+    execution: Optional[Execution]
+    return_code: Optional[int]
+    failure_phase: Optional[FailurePhase]
+    failure_message: Optional[str]
+
+
+class ManagedRunner(Runner[ResultT], Protocol[ResultT]):
+    """A persistent observer with explicit start, refresh and detach support."""
+
+    id: str
+
+    def start(self) -> None: ...
+    def refresh(self): ...
+    def stop_observation(self) -> None: ...
 
 
 class Executor:
@@ -681,9 +699,7 @@ class Executor:
         the requested paths still select the remote sources. The caller owns
         verification and publication of staged downloads.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} cannot retrieve persistent result files"
-        )
+        raise NotImplementedError(f"{type(self).__name__} cannot retrieve persistent result files")
 
     def submission_directory(self, spec: ExecutionSpec) -> str:
         return os.path.abspath(os.fspath(spec.directory))
@@ -694,20 +710,12 @@ class Executor:
     def status(self, *runs) -> Tuple[RunStatus, ...]:
         if not runs:
             return ()
-        raise NotImplementedError(
-            f"{type(self).__name__} cannot query persistent run status"
-        )
+        raise NotImplementedError(f"{type(self).__name__} cannot query persistent run status")
 
-    def recover_submission(
-        self, run_id, submission, *, submitted_at=None
-    ) -> Optional[RunStatus]:
-        raise NotImplementedError(
-            f"{type(self).__name__} cannot recover an uncertain submission"
-        )
+    def recover_submission(self, run_id, submission, *, submitted_at=None) -> Optional[RunStatus]:
+        raise NotImplementedError(f"{type(self).__name__} cannot recover an uncertain submission")
 
-    def create_project_run(
-        self, spec: ExecutionSpec, *, run_id: str, callback=None
-    ) -> Runner:
+    def create_project_run(self, spec: ExecutionSpec, *, run_id: str, callback=None) -> Runner:
         return self.create_run(spec, callback=callback)
 
     def create_run(self, spec: ExecutionSpec, callback=None) -> Runner:
@@ -720,6 +728,4 @@ class Executor:
         output_listener=None,
         start=True,
     ) -> Runner:
-        raise NotImplementedError(
-            f"{type(self).__name__} cannot attach to an existing run"
-        )
+        raise NotImplementedError(f"{type(self).__name__} cannot attach to an existing run")

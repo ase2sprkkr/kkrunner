@@ -3,21 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
-import json
 import os
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock, RLock
-from typing import Optional
+from threading import Lock
 from uuid import uuid4
 
 
-from .file_locks import FileLock
 from .file_versions import FileState, FileVersion, file_digest
-from ._durability import durable_mkdir, durable_write_json, sync_file
+from ._durability import sync_file
 from .base import (
     Executor,
     FailurePhase,
@@ -27,10 +22,15 @@ from .base import (
 )
 from .endpoint import ExecutorEndpoint, endpoint_for_executor
 from .pool import default_executor_pool
+from .records import RunRecord
+from .records import CorruptRunRecord as CorruptRunRecord, RunStore as RunStore
+from .conflicts import submission_conflicts
 from .postprocessing import PostprocessingRunner, ProcessingPending
-from .metadata import freeze_metadata
 from .run_model import (
-    ArtifactAvailabilityState, Execution, WorkingDirectory, FileManifest,
+    ArtifactAvailabilityState,
+    Execution,
+    WorkingDirectory,
+    FileManifest,
 )
 from .transport import expand_local_candidates, has_file_magic
 
@@ -39,7 +39,6 @@ class HistoricalFileMismatchError(OSError):
     """Restored contents differ from a run's captured SHA-256 digest."""
 
 
-_RUN_RECORD_SCHEMA_VERSION = 1
 _STATE_RANK = {
     RunState.NEW: 0,
     RunState.SUBMITTING: 1,
@@ -81,14 +80,6 @@ def _failure_phase(value):
     return FailurePhase(value)
 
 
-class CorruptRunRecord(RuntimeError):
-    """A persisted run record cannot be decoded or validated."""
-
-    def __init__(self, path, message):
-        self.path = Path(path)
-        super().__init__(f"Corrupt run record {self.path}: {message}")
-
-
 class DuplicateSubmissionError(RuntimeError):
     """A project run would duplicate an active calculation namespace."""
 
@@ -102,276 +93,16 @@ class DuplicateSubmissionError(RuntimeError):
         )
 
 
-@dataclass(frozen=True)
-class RunRecord:
-    """Single durable identity, file manifest and lifecycle of one calculation."""
-
-    id: str
-    state: RunState
-    created_at: str
-    updated_at: str
-    execution: Execution
-    files: FileManifest
-    finished_at: Optional[str] = None
-    return_code: Optional[int] = None
-    message: Optional[str] = None
-    failure_phase: Optional[FailurePhase] = None
-    schema_version: int = _RUN_RECORD_SCHEMA_VERSION
-    project_id: Optional[str] = None
-    metadata: dict = field(default_factory=dict)
-    processing_required: bool = False
-    processing_attempt: Optional[str] = None
-
-    def __post_init__(self):
-        if (not isinstance(self.id, str) or not self.id or self.id in (".", "..")
-                or any(c in self.id for c in ("/", "\\", "\x00"))):
-            raise ValueError("Run id must be a nonempty filename component")
-        for name in ("created_at", "updated_at", "finished_at"):
-            value = getattr(self, name)
-            if value is None and name == "finished_at":
-                continue
-            if not isinstance(value, str):
-                raise TypeError(f"{name} must be an ISO timestamp")
-            try:
-                datetime.fromisoformat(value)
-            except ValueError as exc:
-                raise ValueError(f"Invalid {name} timestamp: {value!r}") from exc
-        if self.return_code is not None and type(self.return_code) is not int:
-            raise TypeError("return_code must be an integer or None")
-        for name in ("message", "processing_attempt"):
-            if getattr(self, name) is not None and not isinstance(getattr(self, name), str):
-                raise TypeError(f"{name} must be a string or None")
-        object.__setattr__(self, "metadata", freeze_metadata(self.metadata))
-        if type(self.processing_required) is not bool:
-            raise TypeError("processing_required must be a bool")
-        if self.project_id is not None:
-            object.__setattr__(self, "project_id", str(self.project_id))
-        if isinstance(self.execution, dict):
-            object.__setattr__(self, "execution", Execution(**self.execution))
-        if isinstance(self.files, dict):
-            object.__setattr__(self, "files", FileManifest(**self.files))
-        if not isinstance(self.execution, Execution):
-            raise TypeError("execution must describe an Execution")
-        if not isinstance(self.files, FileManifest):
-            raise TypeError("files must describe a FileManifest")
-        if not isinstance(self.state, RunState):
-            object.__setattr__(self, "state", RunState(self.state))
-        if self.failure_phase is not None and not isinstance(self.failure_phase, FailurePhase):
-            object.__setattr__(self, "failure_phase", FailurePhase(self.failure_phase))
-        if type(self.schema_version) is not int or self.schema_version != _RUN_RECORD_SCHEMA_VERSION:
-            raise ValueError(
-                f"unsupported schema version {self.schema_version}; "
-                f"expected {_RUN_RECORD_SCHEMA_VERSION}"
-            )
-
-
-def _manifest_accesses(record):
-    """Resolve declared read/write paths on the execution host."""
-    files = record.files
-    directory = record.execution.directory
-    remote = directory.remote is not None
-
-    def path(entry):
-        if entry is None:
-            return None
-        value = entry.remote_path if remote else entry.local_path
-        if remote and value is None and entry.local_path is not None:
-            # Before staging, declarations already determine the target footprint.
-            # Resolve from the mapped working directory without transferring files.
-            local = entry.local_path
-            if not os.path.isabs(local):
-                local = os.path.join(directory.local, local)
-            relative = os.path.relpath(local, directory.local)
-            return os.path.normpath(os.path.join(directory.remote, relative))
-        if value is None:
-            return None
-        return os.path.normpath(
-            value if os.path.isabs(value) else os.path.join(directory.target, value)
-        )
-
-    reads = {path(entry) for entry in files.inputs}
-    reads.update(path(cache.file) for cache in files.caches)
-    writes = {path(entry) for entry in (files.stdout, files.stderr, *files.outputs)}
-    writes.update(path(cache.file) for cache in files.caches)
-    return reads - {None}, writes - {None}
-
-
-def _path_overlap(a, b):
-    """Conservatively compare literal paths and glob declarations."""
-    a_magic, b_magic = has_file_magic(a), has_file_magic(b)
-    if not a_magic:
-        return fnmatch.fnmatchcase(a, b) if b_magic else a == b
-    if not b_magic:
-        return fnmatch.fnmatchcase(b, a)
-    if a == b:
-        return True
-
-    # Glob/glob intersection is not generally decidable by fnmatch.
-    # Only disjoint literal prefixes can prove that no collision is possible.
-    def prefix(pattern):
-        return pattern[:min((pattern.find(c) for c in "*?[" if c in pattern),
-                            default=len(pattern))]
-
-    pa, pb = prefix(a), prefix(b)
-    return pa.startswith(pb) or pb.startswith(pa)
-
-
-def _paths_overlap(first, second):
-    return any(_path_overlap(a, b) for a in first for b in second)
-
-
-def submission_conflicts(left: RunRecord, right: RunRecord) -> bool:
-    """Conservatively exclude overlapping declared read/write operations."""
-    a, b = left.execution, right.execution
-    if a.endpoint != b.endpoint:
-        return False
-    left_reads, left_writes = _manifest_accesses(left)
-    right_reads, right_writes = _manifest_accesses(right)
-    if (_paths_overlap(left_writes, right_reads | right_writes)
-            or _paths_overlap(right_writes, left_reads)):
-        return True
-    return False
-
-
-class RunStore:
-    """Project run history stored as date-sharded durable JSON files."""
-
-    def __init__(self, directory):
-        """A run store belongs to exactly one project directory."""
-        self.directory = Path(directory).expanduser()
-        self._lock = RLock()
-
-    @staticmethod
-    def _bucket(created_at):
-        try:
-            return datetime.fromisoformat(created_at).date().isoformat()
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid run creation timestamp: {created_at!r}") from exc
-
-    def _path(self, record):
-        return self.directory / self._bucket(record.created_at) / f"{record.id}.json"
-
-    def _run_lock_path(self, record):
-        path = self._path(record)
-        return path.with_name(f".{record.id}.lock")
-
-    def _path_for_id(self, run_id):
-        filename = f"{run_id}.json"
-        for day in self._day_directories(newest=True):
-            path = day / filename
-            if path.is_file():
-                return path
-        raise FileNotFoundError(run_id)
-
-    @staticmethod
-    def _decode(path):
-        try:
-            with path.open() as file:
-                data = json.load(file)
-            version = data.get("schema_version")
-            if version != _RUN_RECORD_SCHEMA_VERSION:
-                raise ValueError(
-                    f"unsupported schema version {version!r}; "
-                    f"expected {_RUN_RECORD_SCHEMA_VERSION}"
-                )
-            return RunRecord(**data)
-        except CorruptRunRecord:
-            raise
-        except (json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
-            raise CorruptRunRecord(path, str(exc)) from exc
-
-    @staticmethod
-    def _json_default(value):
-        if isinstance(value, os.PathLike):
-            return os.fspath(value)
-        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-    def _write_unlocked(self, record):
-        durable_mkdir(self.directory, parents=True, exist_ok=True, mode=0o700)
-        path = self._path(record)
-        durable_mkdir(path.parent, parents=True, exist_ok=True, mode=0o700)
-        durable_write_json(
-            path,
-            asdict(record),
-            mode=0o600,
-            sort_keys=True,
-            default=self._json_default,
-        )
-        return record
-
-    @contextmanager
-    def submission_lock(self):
-        durable_mkdir(self.directory, parents=True, exist_ok=True, mode=0o700)
-        with self._lock, FileLock(self.directory / ".submit.lock"):
-            yield
-
-    def save(self, record: RunRecord):
-        with self._lock:
-            return self._write_unlocked(record)
-
-    def update(self, record: RunRecord, updater):
-        with self._lock, FileLock(self._run_lock_path(record)):
-            path = self._path(record)
-            latest = self._decode(path) if path.is_file() else record
-            updated = updater(latest)
-            if (updated.id != latest.id or updated.created_at != latest.created_at
-                    or updated.metadata != latest.metadata
-                    or updated.processing_required != latest.processing_required
-                    or updated.project_id != latest.project_id):
-                raise ValueError("Run update cannot change persistent identity or metadata")
-            if (latest.execution.backend_id is not None
-                    and updated.execution.backend_id != latest.execution.backend_id):
-                raise ValueError("Backend identity cannot change")
-            return self._write_unlocked(updated)
-
-    def get(self, run_id):
-        return self._decode(self._path_for_id(run_id))
-
-    def _day_directories(self, *, newest):
-        if not self.directory.is_dir():
-            return ()
-        days = [path for path in self.directory.iterdir() if path.is_dir()]
-        return tuple(sorted(days, key=lambda path: path.name, reverse=newest))
-
-    def _records_in_directory(self, directory, *, newest):
-        records = []
-        for path in directory.glob("*.json"):
-            try:
-                records.append(self._decode(path))
-            except CorruptRunRecord:
-                raise
-        return sorted(records, key=lambda record: record.created_at, reverse=newest)
-
-    def runs(self, *, active=None, limit=None, newest=False):
-        if limit is not None and limit < 0:
-            raise ValueError("limit must be non-negative")
-        if limit == 0:
-            return ()
-
-        with self._lock:
-            records = []
-            for day in self._day_directories(newest=newest):
-                for record in self._records_in_directory(day, newest=newest):
-                    if active is True and record.state.is_terminal:
-                        continue
-                    if active is False and not record.state.is_terminal:
-                        continue
-                    records.append(record)
-                    if limit is not None and len(records) >= limit:
-                        return tuple(records)
-            return tuple(records)
-
-
-class ExecutionManager:
+class RunManager:
     """Persist public run lifecycle without task-specific knowledge."""
 
     def __init__(self, store=None, *, executor_pool=None, submitting_grace=60.0):
         if submitting_grace < 0:
             raise ValueError("submitting_grace must be non-negative")
         self.store = store
-        self.executor_pool = (
-            executor_pool if executor_pool is not None else default_executor_pool()
-        )
+        self.executor_pool = executor_pool if executor_pool is not None else default_executor_pool()
+        self._ack_lock = Lock()
+        self._acknowledged_results = set()
         self.submitting_grace = float(submitting_grace)
 
     def register_executor(self, executor: Executor, endpoint=None):
@@ -427,9 +158,7 @@ class ExecutionManager:
             return ()
         if result_files.captured_at is not None:
             return tuple(
-                os.fspath(item.path)
-                for item in result_files.all_versions
-                if item.state() is FileState.MISSING
+                os.fspath(item.path) for item in result_files.all_versions if item.state() is FileState.MISSING
             )
 
         missing = []
@@ -445,12 +174,11 @@ class ExecutionManager:
         if result_files is None or result_files.captured_at is not None:
             return result_files
         from .file_availability import discover_local_files
+
         captured = replace(
             result_files,
             input_versions=self._result_files_snapshot(result_files.input_files),
-            output_versions=self._result_files_snapshot(
-                result_files.output_files, sync=True
-            ),
+            output_versions=self._result_files_snapshot(result_files.output_files, sync=True),
             captured_at=_now(),
         )
         return discover_local_files(captured)
@@ -474,15 +202,25 @@ class ExecutionManager:
         )
 
     def new_record(
-        self, *, directory, endpoint=None,
-        remote_directory=None, files=None, run_id=None,
-        project_id=None, metadata=None, processing_required=False,
+        self,
+        *,
+        directory,
+        endpoint=None,
+        remote_directory=None,
+        files=None,
+        run_id=None,
+        project_id=None,
+        metadata=None,
+        processing_required=False,
     ):
         now = _now()
         local = os.path.abspath(os.fspath(directory))
         return RunRecord(
-            id=run_id or uuid4().hex, state=RunState.NEW, created_at=now,
-            updated_at=now, metadata={} if metadata is None else metadata,
+            id=run_id or uuid4().hex,
+            state=RunState.NEW,
+            created_at=now,
+            updated_at=now,
+            metadata={} if metadata is None else metadata,
             processing_required=processing_required,
             execution=Execution(endpoint or ExecutorEndpoint(), WorkingDirectory(local, remote_directory)),
             files=files if files is not None else FileManifest(),
@@ -534,19 +272,24 @@ class ExecutionManager:
         files=_UNCHANGED,
         expected_updated_at=_UNCHANGED,
         expected_record=None,
+        expected_processing_attempt=None,
     ):
         def merge(latest):
+            if expected_processing_attempt is not None and (
+                latest.processing_attempt != expected_processing_attempt or latest.state != RunState.POSTPROCESSING
+            ):
+                raise ProcessingPending("Processing attempt no longer owns completion")
+            if expected_processing_attempt is not None and state == RunState.FINISHED and latest.files.failed_artifacts:
+                raise OSError(latest.files.availability_message or "Artifacts became unavailable during processing")
             if expected_record is not None and latest != expected_record:
                 raise RuntimeError("Run changed during postprocessing retry")
-            if (expected_updated_at is not _UNCHANGED
-                    and latest.updated_at != expected_updated_at):
+            if expected_updated_at is not _UNCHANGED and latest.updated_at != expected_updated_at:
                 # An independent refresh has superseded this observation.
                 return latest
             final_locked = latest.state.is_terminal
             now = _now()
             merged_state = self._merged_state(latest, state)
-            if (state is not None and RunState(state) == RunState.UNKNOWN
-                    and merged_state != RunState.UNKNOWN):
+            if state is not None and RunState(state) == RunState.UNKNOWN and merged_state != RunState.UNKNOWN:
                 # Ignore the entire stale observation, including its message
                 # and artifact metadata, not merely its proposed state.
                 return latest
@@ -574,8 +317,7 @@ class ExecutionManager:
                 normalized = _failure_phase(failure_phase)
                 if not final_locked or latest.failure_phase is None:
                     changes["failure_phase"] = normalized
-            if all(getattr(latest, key) == value for key, value in changes.items()
-                   if key != "updated_at"):
+            if all(getattr(latest, key) == value for key, value in changes.items() if key != "updated_at"):
                 return latest
             return replace(latest, **changes)
 
@@ -589,9 +331,7 @@ class ExecutionManager:
             return replace(
                 latest,
                 updated_at=_now(),
-                files=latest.files.with_file_availability(
-                    path, state.value, message
-                ),
+                files=latest.files.with_file_availability(path, state.value, message),
             )
 
         return self.store.update(record, update)
@@ -600,9 +340,7 @@ class ExecutionManager:
         if record.state != RunState.SUBMITTING or record.execution.backend_id is not None:
             return False
         now = now or datetime.now(timezone.utc)
-        return (
-            now - _timestamp(record.updated_at)
-        ).total_seconds() >= self.submitting_grace
+        return (now - _timestamp(record.updated_at)).total_seconds() >= self.submitting_grace
 
     def recover_submitting(self, record):
         record = self.store.get(record.id)
@@ -639,11 +377,16 @@ class ExecutionManager:
         attempted_recovery = set()
         while True:
             with self.store.submission_lock():
+                try:
+                    existing = self.store.get(record.id)
+                except FileNotFoundError:
+                    existing = None
+                if existing is not None and (existing != record or existing.state != RunState.NEW):
+                    raise ValueError(f"Run id {record.id!r} already exists; use attach()")
                 conflicts = tuple(
                     active
                     for active in self.store.runs(active=True)
-                    if active.id != record.id
-                    and submission_conflicts(record, active)
+                    if active.id != record.id and submission_conflicts(record, active)
                 )
                 if not conflicts:
                     if record.files is not None:
@@ -655,8 +398,7 @@ class ExecutionManager:
                 stale = tuple(
                     conflict
                     for conflict in conflicts
-                    if conflict.id not in attempted_recovery
-                    and self._is_stale_submitting(conflict)
+                    if conflict.id not in attempted_recovery and self._is_stale_submitting(conflict)
                 )
 
             if not stale:
@@ -673,16 +415,23 @@ class ExecutionManager:
     def update(self, record, status: RunStatus):
         phase = _failure_phase(status.failure_phase)
         return_code = status.return_code
-        state = (RunState.POSTPROCESSING if record.processing_required else RunState.FINISHED
-                 ) if status.state == RunState.FINISHED else status.state
+        state = (
+            (RunState.POSTPROCESSING if record.processing_required else RunState.FINISHED)
+            if status.state == RunState.FINISHED
+            else status.state
+        )
         execution = status.execution
         if execution is None and status.backend_id is not None:
             execution = record.execution.submitted(status.backend_id)
         if status.state == RunState.FINISHED:
             updated = self.complete(
-                record, state=state, execution=execution,
+                record,
+                state=state,
+                execution=execution,
                 files=status.files if status.files is not None else record.files,
-                return_code=return_code, message=status.message, failure_phase=phase,
+                return_code=return_code,
+                message=status.message,
+                failure_phase=phase,
                 artifacts_available=True,
             )
         else:
@@ -696,6 +445,7 @@ class ExecutionManager:
                 failure_phase=phase,
             )
         self._acknowledge_submission(self.executor_for(updated), updated)
+        self._acknowledge_result(updated)
         return updated
 
     def complete(
@@ -710,6 +460,7 @@ class ExecutionManager:
         artifacts_available=False,
         files=None,
         expected_record=None,
+        expected_processing_attempt=None,
     ):
         state = RunState(state)
         phase = _failure_phase(failure_phase)
@@ -717,11 +468,13 @@ class ExecutionManager:
 
         if result_files is not None and result_files.failed_artifacts:
             artifacts_available = False
-            if state == RunState.FINISHED:
+            if state == RunState.FINISHED or phase == FailurePhase.POSTPROCESSING:
                 # The successful backend does not excuse a required download
                 # failure; the failed file retains the specific diagnostics.
                 state = RunState.FAILED
-                phase = FailurePhase.DOWNLOAD
+                phase = (
+                    FailurePhase.DOWNLOAD if record.execution.directory.remote is not None else FailurePhase.ARTIFACTS
+                )
                 message = result_files.availability_message or message
 
         if artifacts_available and result_files is not None:
@@ -732,13 +485,26 @@ class ExecutionManager:
                 phase = FailurePhase.ARTIFACTS
                 message = str(exc)
                 result_files = result_files._map_artifacts(
-                    lambda item: replace(
-                        item, availability_state="failed",
-                        availability_message=message,
-                    ) if item.availability_state in (None, "pending") else item
+                    lambda item: (
+                        replace(
+                            item,
+                            availability_state="failed",
+                            availability_message=message,
+                        )
+                        if item.availability_state in (None, "pending")
+                        else item
+                    )
                 )
 
-        return self.transition(
+        if (
+            result_files is not None
+            and result_files.failed_artifacts
+            and state in (RunState.FINISHED, RunState.POSTPROCESSING)
+        ):
+            state, phase = RunState.FAILED, FailurePhase.ARTIFACTS
+            message = result_files.availability_message or message
+
+        updated = self.transition(
             record,
             state=state,
             execution=execution,
@@ -747,7 +513,10 @@ class ExecutionManager:
             failure_phase=phase,
             files=result_files,
             expected_record=expected_record,
+            expected_processing_attempt=expected_processing_attempt,
         )
+        self._acknowledge_result(updated)
+        return updated
 
     def resume_download(self, run):
         """Explicitly reopen a failed post-execution transfer for retry.
@@ -759,24 +528,36 @@ class ExecutionManager:
         record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
 
         def reopen(latest):
-            if (latest.state != RunState.FAILED
-                    or latest.failure_phase != FailurePhase.DOWNLOAD
-                    or latest.return_code != 0
-                    or latest.execution.backend_id is None
-                    or latest.files is None
-                    or latest.files.captured_at is not None):
+            if (
+                latest.state != RunState.FAILED
+                or latest.failure_phase != FailurePhase.DOWNLOAD
+                or latest.return_code != 0
+                or latest.execution.backend_id is None
+                or latest.files is None
+                or latest.files.captured_at is not None
+            ):
                 raise ValueError("Only failed downloads of successful backend jobs can be retried")
             # Keep already transferred artifacts and all bytes on disk.
             # Only failed transfers become eligible for a fresh attempt.
             files = latest.files._map_artifacts(
-                lambda item: replace(
-                    item, availability_state="pending",
-                    availability_message=None,
-                ) if item.availability_state == "failed" else item
+                lambda item: (
+                    replace(
+                        item,
+                        availability_state="pending",
+                        availability_message=None,
+                    )
+                    if item.availability_state == "failed"
+                    else item
+                )
             )
             return replace(
-                latest, state=RunState.DOWNLOADING, finished_at=None,
-                failure_phase=None, message=None, files=files, updated_at=_now(),
+                latest,
+                state=RunState.DOWNLOADING,
+                finished_at=None,
+                failure_phase=None,
+                message=None,
+                files=files,
+                updated_at=_now(),
             )
 
         return self.store.update(record, reopen)
@@ -788,17 +569,16 @@ class ExecutionManager:
         releases this lock when a client dies; POSTPROCESSING then remains
         attachable/retryable. A live owner is never displaced by a timeout.
         """
-        lock = FileLock(self.store._run_lock_path(record).with_suffix(".processing.lock"))
+        lock = self.store.processing_lock(record)
         if not lock.acquire(blocking=False):
             raise ProcessingPending("Another client owns postprocessing")
         try:
             latest = self.store.get(record.id)
             if latest.state == RunState.FINISHED:
                 # A different observer already completed it; no second callback.
-                return outcome
+                raise ProcessingPending("Result already processed by another observer; load its historical result")
             if latest.state.is_terminal and not (
-                retry and latest.state == RunState.FAILED
-                and latest.failure_phase == FailurePhase.POSTPROCESSING
+                retry and latest.state == RunState.FAILED and latest.failure_phase == FailurePhase.POSTPROCESSING
             ):
                 raise RuntimeError("Run is already terminal")
             manifest = latest.files if files is None else files
@@ -814,17 +594,22 @@ class ExecutionManager:
 
             def claim(current):
                 if current.state.is_terminal and not (
-                    retry and current.state == RunState.FAILED
-                    and current.failure_phase == FailurePhase.POSTPROCESSING
+                    retry and current.state == RunState.FAILED and current.failure_phase == FailurePhase.POSTPROCESSING
                 ):
                     raise ProcessingPending("Run completed before processing claim")
                 return replace(
-                    current, state=RunState.POSTPROCESSING, files=manifest,
-                    processing_attempt=uuid4().hex, updated_at=_now(),
-                    finished_at=None, failure_phase=None, message=None,
+                    current,
+                    state=RunState.POSTPROCESSING,
+                    files=manifest,
+                    processing_attempt=uuid4().hex,
+                    updated_at=_now(),
+                    finished_at=None,
+                    failure_phase=None,
+                    message=None,
                     return_code=outcome.return_code,
                     execution=current.execution if execution is None else execution,
                 )
+
             claimed = self.store.update(latest, claim)
             if process_result is None:
                 raise ProcessingPending("Postprocessing requires a client callback")
@@ -834,14 +619,20 @@ class ExecutionManager:
                     raise RuntimeError("Historical artifacts changed during postprocessing retry")
             except BaseException as exc:
                 self.complete(
-                    claimed, state=RunState.FAILED, return_code=outcome.return_code,
-                    message=str(exc), failure_phase=FailurePhase.POSTPROCESSING,
-                    expected_record=claimed,
+                    claimed,
+                    state=RunState.FAILED,
+                    return_code=outcome.return_code,
+                    message=str(exc),
+                    failure_phase=FailurePhase.POSTPROCESSING,
+                    expected_processing_attempt=claimed.processing_attempt,
                 )
                 raise
             self.complete(
-                claimed, state=RunState.FINISHED, return_code=outcome.return_code,
-                files=manifest, expected_record=claimed,
+                claimed,
+                state=RunState.FINISHED,
+                return_code=outcome.return_code,
+                files=manifest,
+                expected_processing_attempt=claimed.processing_attempt,
             )
             return result
         finally:
@@ -850,18 +641,24 @@ class ExecutionManager:
     def retry_postprocessing(self, run, process_result):
         """Retry a failed or interrupted processing attempt without rerunning a job."""
         from .base import ExecutionOutcome
+
         record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
-        if (not record.processing_required or record.return_code != 0
-                or not (record.state == RunState.POSTPROCESSING or
-                        (record.state == RunState.FAILED and
-                         record.failure_phase == FailurePhase.POSTPROCESSING))):
+        if (
+            not record.processing_required
+            or record.return_code != 0
+            or not (
+                record.state == RunState.POSTPROCESSING
+                or (record.state == RunState.FAILED and record.failure_phase == FailurePhase.POSTPROCESSING)
+            )
+        ):
             raise ValueError("Only postprocessing failures or interrupted processing can be retried")
         files = record.files
         if files.captured_at is None:
             raise ValueError("Postprocessing retry requires captured artifacts")
         outcome = ExecutionOutcome(
-            input_file=(files.input_file if self._file_is_current(
-                files, files.input_file, files.input_versions) else None),
+            input_file=(
+                files.input_file if self._file_is_current(files, files.input_file, files.input_versions) else None
+            ),
             output_file=files.output_file,
             error_file=None if files.stderr is None else files.stderr.local_path,
             return_code=record.return_code,
@@ -890,27 +687,29 @@ class ExecutionManager:
             version = versions.get(path)
             staged = (
                 Path(path).with_name(f".{Path(path).name}.{uuid4().hex}.tmp")
-                if version is not None and version.digest is not None else None
+                if version is not None and version.digest is not None
+                else None
             )
             try:
                 if staged is None:
                     executor.fetch_result_files(record, (path,))
                 else:
                     executor.fetch_result_files(
-                        record, (path,), destinations={path: os.fspath(staged)},
+                        record,
+                        (path,),
+                        destinations={path: os.fspath(staged)},
                     )
                     if not staged.is_file():
-                        raise FileNotFoundError(
-                            f"Historical artifact was not retrieved: {path}"
-                        )
+                        raise FileNotFoundError(f"Historical artifact was not retrieved: {path}")
                     if file_digest(staged) != version.digest:
-                        raise HistoricalFileMismatchError(
-                            f"Historical result files have been overwritten: {path}"
-                        )
+                        raise HistoricalFileMismatchError(f"Historical result files have been overwritten: {path}")
                     os.replace(staged, path)
             except OSError as exc:
                 self.update_artifact_availability(
-                    record, path, ArtifactAvailabilityState.FAILED, str(exc),
+                    record,
+                    path,
+                    ArtifactAvailabilityState.FAILED,
+                    str(exc),
                 )
                 raise
             finally:
@@ -919,14 +718,44 @@ class ExecutionManager:
             refreshed = self.store.get(record.id)
             if path in self._missing_result_files(refreshed.files):
                 record = self.update_artifact_availability(
-                    refreshed, path, ArtifactAvailabilityState.FAILED,
+                    refreshed,
+                    path,
+                    ArtifactAvailabilityState.FAILED,
                     "Historical artifact is still missing",
                 )
             else:
                 record = self.update_artifact_availability(
-                    refreshed, path, ArtifactAvailabilityState.AVAILABLE,
+                    refreshed,
+                    path,
+                    ArtifactAvailabilityState.AVAILABLE,
                 )
         return record
+
+    def _acknowledge_result(self, record):
+        """Best-effort ACK after durable completion; failed ACKs remain retryable."""
+        if not record.state.is_terminal or record.execution.backend_id is None:
+            return False
+        if record.failure_phase == FailurePhase.DOWNLOAD and record.return_code == 0:
+            # Retry will reattach to download preserved output. Retain the
+            # terminal backend receipt until that end-to-end attempt settles.
+            return False
+        key = (record.id, record.execution.backend_id)
+        with self._ack_lock:
+            if key in self._acknowledged_results:
+                return True
+            try:
+                executor = self.executor_for(record)
+                acknowledge = getattr(executor, "acknowledge", None)
+                if acknowledge is not None:
+                    acknowledge(record)
+            except (OSError, RuntimeError, ValueError, NotImplementedError):
+                return False
+            self._acknowledged_results.add(key)
+            return True
+
+    def reconcile_acknowledgements(self):
+        """Retry idempotent result ACKs for durable terminal records."""
+        return tuple(record.id for record in self.store.runs(active=False) if self._acknowledge_result(record))
 
     @staticmethod
     def _acknowledge_submission(executor, record):
@@ -944,6 +773,15 @@ class ExecutionManager:
     @staticmethod
     def _complete(project_run, result, callback):
         project_run._sync_completion(result)
+        if (
+            project_run.record.state == RunState.FINISHED
+            and project_run.record.processing_required
+            and project_run._runner.state != RunState.FINISHED
+        ):
+            # Another observer finished while this one lost backend observation.
+            # Completion notification must not substitute a raw application result.
+            result = None
+            project_run._runner.result = None
         if callback is not None:
             # Completion of observation, including UNKNOWN, is notification.
             # It is not proof that the backend calculation finished.
@@ -966,14 +804,10 @@ class ExecutionManager:
         endpoint = endpoint_for_executor(executor)
         record = self.new_record(
             metadata=metadata,
-            processing_required=(process_result is not None if processing_required is None
-                                 else processing_required),
+            processing_required=(process_result is not None if processing_required is None else processing_required),
             directory=spec.directory,
             endpoint=endpoint,
-            remote_directory=(
-                executor.submission_directory(spec)
-                if endpoint.executor == "ssh" else None
-            ),
+            remote_directory=(executor.submission_directory(spec) if endpoint.executor == "ssh" else None),
             files=FileManifest.from_spec(spec),
             run_id=run_id,
         )
@@ -987,18 +821,23 @@ class ExecutionManager:
             set_manifest(record.files)
         processor = None
         if record.processing_required:
+
             def processor(outcome):
                 return self._process_outcome(
-                    record, outcome, process_result, files=getattr(raw, "files", None),
+                    record,
+                    outcome,
+                    process_result,
+                    files=getattr(raw, "files", None),
+                    execution=(getattr(raw, "execution", None) or record.execution.submitted(raw.backend_id)),
                 )
+
         processed = PostprocessingRunner(raw, processor)
         project_run = ProjectRunner(self, executor, processed, record)
-        processed.callback = lambda result: self._complete(
-            project_run, result, callback
-        )
+        processed.callback = lambda result: self._complete(project_run, result, callback)
         return project_run
 
     def refresh(self, records=None):
+        self.reconcile_acknowledgements()
         records = tuple(self.store.runs(active=True) if records is None else records)
         current = {record.id: record for record in records}
         groups = {}
@@ -1026,7 +865,9 @@ class ExecutionManager:
         output_listener=None,
     ):
         """Attach raw execution, then resume client-side postprocessing."""
-        record = self.store.get(run) if isinstance(run, str) else run
+        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
+        if record.state.is_terminal:
+            raise RuntimeError("Run is already terminal; load its historical result or use an explicit retry")
         if process_result is not None and not record.processing_required:
             raise ValueError("This run did not request postprocessing")
         if record.execution.backend_id is None:
@@ -1044,15 +885,19 @@ class ExecutionManager:
         )
         processor = None
         if record.processing_required:
+
             def processor(outcome):
                 return self._process_outcome(
-                    record, outcome, process_result, files=getattr(raw, "files", None),
+                    record,
+                    outcome,
+                    process_result,
+                    files=getattr(raw, "files", None),
+                    execution=(getattr(raw, "execution", None) or record.execution.submitted(raw.backend_id)),
                 )
+
         processed = PostprocessingRunner(raw, processor)
         project_run = ProjectRunner(self, executor, processed, record)
-        processed.callback = lambda result: self._complete(
-            project_run, result, callback
-        )
+        processed.callback = lambda result: self._complete(project_run, result, callback)
         project_run.start()
         return project_run
 
@@ -1126,6 +971,9 @@ class ProjectRunner:
     def submit(self):
         if self._record.state != RunState.NEW:
             raise RuntimeError(f"Run is already {self._record.state.value}")
+        resolve = getattr(self.executor, "resolve_submission", None)
+        if resolve is not None:
+            self._record = resolve(self._record, self._runner.spec)
         self._record = self.manager.reserve(self._record)
         self._monitor_record_version = self._record.updated_at
         try:
@@ -1191,8 +1039,7 @@ class ProjectRunner:
             # An attached PSI/J job can initially report NEW before the
             # scheduler provides its actual state.
             state = self._runner.state
-            if (not self._completion_persisted and self.backend_id is not None
-                    and state != RunState.NEW):
+            if not self._completion_persisted and self.backend_id is not None and state != RunState.NEW:
                 self._record = self.manager.transition(
                     self._record,
                     state=state,
@@ -1207,6 +1054,12 @@ class ProjectRunner:
         with self._completion_lock:
             if self._completion_persisted:
                 return
+            latest = self.manager.store.get(self.id)
+            if latest.state.is_terminal:
+                self._record = latest
+                self._completion_persisted = True
+                self.manager._acknowledge_result(latest)
+                return
             state = self._runner.state
             phase = self.failure_phase
             message = getattr(self._runner, "failure_message", None)
@@ -1217,7 +1070,9 @@ class ProjectRunner:
                 # The observer ended, not necessarily the calculation.
                 # No final artifact publication or completion timestamp.
                 self._record = self.manager.transition(
-                    self._record, state=state, execution=self.execution,
+                    self._record,
+                    state=state,
+                    execution=self.execution,
                     message=message,
                     expected_updated_at=self._monitor_record_version,
                 )
@@ -1239,26 +1094,22 @@ class ProjectRunner:
                 artifacts_available=artifacts_available,
                 files=self.files,
             )
-            # ACK is strictly after RunStore's crash-durable terminal transition.
-            # A lost ACK reply is harmless: backend receipts are idempotently deleted.
-            # Keep the persisted result even if the acknowledgement cannot be sent.
-            if self._record.state.is_terminal and self.backend_id is not None:
-                acknowledge = getattr(self.executor, "acknowledge", None)
-                if acknowledge is not None:
-                    try:
-                        acknowledge(self._record)
-                    except (OSError, RuntimeError):
-                        pass
-
             if self._record.state.is_terminal:
                 self._completion_persisted = True
 
     def wait(self):
         try:
-            return self._runner.wait()
+            result = self._runner.wait()
         finally:
             if self._record.state != RunState.NEW:
                 self._sync_completion(self.result)
+        if (
+            self._record.state == RunState.FINISHED
+            and self._record.processing_required
+            and self._runner.state != RunState.FINISHED
+        ):
+            raise ProcessingPending("Result was processed by another observer; load its historical result")
+        return result
 
     def run(self):
         if self._record.state == RunState.NEW:
@@ -1293,3 +1144,7 @@ class ProjectRunner:
                         execution=self.execution,
                         failure_phase=self.failure_phase,
                     )
+
+
+# Compatibility name: the project-free API is explicitly RunManager.
+ExecutionManager = RunManager

@@ -19,7 +19,8 @@ from .base import (
     RunState,
     SubmissionNotStarted,
 )
-from .file_availability import clear_declared_outputs, validate_output_collisions
+from .file_availability import clear_declared_outputs, validate_output_collisions, discover_local_files
+from .run_model import FileManifest
 from .local_process import (
     materialize_local_spec,
     pump_stream,
@@ -198,6 +199,12 @@ class LocalRunner:
                 self._state = RunState.FAILED
                 self._failure_phase = FailurePhase.EXECUTION
                 self._failure_message = f"Process exited with status {return_code}"
+            if self._state == RunState.FINISHED:
+                files = discover_local_files(FileManifest.from_spec(self.spec))
+                if files.failed_artifacts:
+                    self._state = RunState.FAILED
+                    self._failure_phase = FailurePhase.ARTIFACTS
+                    self._failure_message = files.availability_message
             return self.result
         except BaseException:
             self._started.set()

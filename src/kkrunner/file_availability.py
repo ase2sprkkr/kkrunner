@@ -11,7 +11,7 @@ import os
 from .transport import expand_local_candidates, has_file_magic
 
 
-def discover_local_files(files, *, include_streams=True):
+def discover_local_files(files, *, include_streams=True, require_outputs=True):
     """Resolve pending local declarations and retain individual wildcard matches."""
     declarations = []
     if include_streams:
@@ -39,7 +39,10 @@ def discover_local_files(files, *, include_streams=True):
             state = "available" if matches else "skipped"
         else:
             state = "available" if os.path.isfile(path) else "skipped"
-        files = files.with_file_availability(path, state)
+        message = None
+        if state == "skipped" and kind == "output" and require_outputs and not entry.optional:
+            state, message = "failed", f"Required output file is missing: {path}"
+        files = files.with_file_availability(path, state, message)
     return files
 
 

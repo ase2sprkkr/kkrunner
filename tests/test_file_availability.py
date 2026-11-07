@@ -23,7 +23,7 @@ def test_discovers_outputs_and_caches_with_independent_pattern_children(tmp_path
 
 def test_missing_optional_files_are_skipped_without_creating_them(tmp_path):
     missing = tmp_path / "missing.out"
-    files = FileManifest(outputs=(FileEntry(local_path=str(missing), availability_state="pending"),))
+    files = FileManifest(outputs=(FileEntry(local_path=str(missing), optional=True, availability_state="pending"),))
     found = discover_local_files(files)
     assert found.outputs[0].availability_state == "skipped"
     assert not missing.exists()
@@ -34,7 +34,7 @@ def test_local_supervisor_discovery_does_not_override_stream_publication(tmp_pat
     output.write_bytes(b"stale")
     files = FileManifest(
         stdout=FileEntry(local_path=str(output), availability_state="pending"),
-        outputs=(FileEntry(local_path=str(tmp_path / "other.out"), availability_state="pending"),),
+        outputs=(FileEntry(local_path=str(tmp_path / "other.out"), optional=True, availability_state="pending"),),
     )
     found = discover_local_files(files, include_streams=False)
     assert found.stdout.availability_state == "pending"

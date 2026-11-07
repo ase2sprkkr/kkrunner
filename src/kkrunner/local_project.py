@@ -52,7 +52,7 @@ def local_manifest(files, status):
 
     if status.failure_phase in (FailurePhase.LAUNCH, FailurePhase.SUBMISSION):
         return files
-    return discover_local_files(files, include_streams=False)
+    return discover_local_files(files, include_streams=False, require_outputs=status.state == RunState.FINISHED)
 
 
 def _local_status_from_facts(backend_id, facts, files=None):

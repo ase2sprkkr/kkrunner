@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from .manager import ExecutionManager as _ExecutionManager, RunStore
+from .manager import RunManager, RunStore
 from .projects import Project, ProjectRepository
 
 
-class ExecutionManager(_ExecutionManager):
+class ProjectExecutionManager(RunManager):
     """Track a run only when it belongs to an existing project.
 
     All projects share the projects_runs/ RunStore. Each RunRecord contains
@@ -15,8 +15,13 @@ class ExecutionManager(_ExecutionManager):
     """
 
     def __init__(
-        self, store=None, *, executor_pool=None, submitting_grace=60.0,
-        project_repository=None, project=None,
+        self,
+        store=None,
+        *,
+        executor_pool=None,
+        submitting_grace=60.0,
+        project_repository=None,
+        project=None,
     ):
         self.projects = project_repository if project_repository is not None else ProjectRepository()
         self._project_id = None
@@ -27,7 +32,8 @@ class ExecutionManager(_ExecutionManager):
         if store is None:
             store = RunStore(self.projects.directory.parent / "projects_runs")
         super().__init__(
-            store, executor_pool=executor_pool,
+            store,
+            executor_pool=executor_pool,
             submitting_grace=submitting_grace,
         )
 
@@ -56,16 +62,30 @@ class ExecutionManager(_ExecutionManager):
         )
 
     def create_run(
-        self, executor, spec, *, process_result=None, metadata=None,
-        processing_required=None, callback=None,
-        run_id=None, project=None,
+        self,
+        executor,
+        spec,
+        *,
+        process_result=None,
+        metadata=None,
+        processing_required=None,
+        callback=None,
+        run_id=None,
+        project=None,
     ):
         manager = self if project is None else self.for_project(project)
         if manager.project_id is None:
             raise ValueError("A tracked run must belong to an existing project")
-        return _ExecutionManager.create_run(
-            manager, executor, spec,
-            process_result=process_result, metadata=metadata,
+        return RunManager.create_run(
+            manager,
+            executor,
+            spec,
+            process_result=process_result,
+            metadata=metadata,
             processing_required=processing_required,
-            callback=callback, run_id=run_id,
+            callback=callback,
+            run_id=run_id,
         )
+
+
+ExecutionManager = ProjectExecutionManager

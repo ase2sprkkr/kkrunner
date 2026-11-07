@@ -47,12 +47,15 @@ class Execution:
             object.__setattr__(self, "endpoint", ExecutorEndpoint(**self.endpoint))
         if isinstance(self.directory, dict):
             object.__setattr__(self, "directory", WorkingDirectory(**self.directory))
+        if not isinstance(self.endpoint, ExecutorEndpoint):
+            raise TypeError("Execution.endpoint must be an ExecutorEndpoint")
+        if not isinstance(self.directory, WorkingDirectory):
+            raise TypeError("Execution.directory must be a WorkingDirectory")
         if self.backend_id is not None:
             identifier = str(self.backend_id)
             if not identifier:
                 raise ValueError("backend_id cannot be empty")
             object.__setattr__(self, "backend_id", identifier)
-
 
     def submitted(self, backend_id: str):
         """Return the execution bound to its immutable backend identity."""
@@ -60,7 +63,6 @@ class Execution:
         if self.backend_id is not None and self.backend_id != submitted.backend_id:
             raise ValueError("Cannot replace an assigned backend identity")
         return submitted
-
 
 
 class ArtifactAvailabilityState(str, Enum):
@@ -85,6 +87,7 @@ class FileEntry:
 
     def __post_init__(self):
         import os
+
         if self.source_pattern is not None:
             object.__setattr__(self, "source_pattern", os.fspath(self.source_pattern))
 
@@ -103,10 +106,7 @@ class FileEntry:
                 raise ValueError("Invalid per-file availability state") from exc
             # Persist JSON-compatible strings, not implementation-specific enums.
             object.__setattr__(self, "availability_state", availability.value)
-        if (
-            self.availability_message is not None
-            and self.availability_state != ArtifactAvailabilityState.FAILED
-        ):
+        if self.availability_message is not None and self.availability_state != ArtifactAvailabilityState.FAILED:
             raise ValueError("An availability error belongs to a failed file")
 
 
@@ -120,6 +120,8 @@ class CacheEntry:
     def __post_init__(self):
         if isinstance(self.file, dict):
             object.__setattr__(self, "file", FileEntry(**self.file))
+        if not isinstance(self.file, FileEntry):
+            raise TypeError("CacheEntry.file must be a FileEntry")
         if self.before is not None:
             object.__setattr__(self, "before", tuple(self.before))
 
@@ -183,6 +185,7 @@ class FileManifest:
     input_versions: tuple[FileVersion, ...] = ()
     output_versions: tuple[FileVersion, ...] = ()
     captured_at: Optional[str] = None
+    stdin: Optional[FileEntry] = None
 
     @classmethod
     def from_spec(cls, spec):
@@ -196,9 +199,7 @@ class FileManifest:
         primary_value = getattr(spec, "input_file", None)
         primary_input = file_path(primary_value, directory)
         if primary_input is not None and getattr(primary_value, "optional", False):
-            raise ValueError(
-                f"Primary input {primary_input} cannot be declared optional"
-            )
+            raise ValueError(f"Primary input {primary_input} cannot be declared optional")
         inputs = declared_file_paths(
             (primary_value, *getattr(spec, "input_files", ())),
             directory,
@@ -238,15 +239,19 @@ class FileManifest:
             seen_caches.add(path)
             if path in read_paths or path in write_paths:
                 raise ValueError(f"Duplicate file declaration: cache collision {path}")
-            caches.append(CacheEntry(FileEntry(
-                local_path=path, optional=getattr(value, "optional", False),
-            )))
+            caches.append(
+                CacheEntry(
+                    FileEntry(
+                        local_path=path,
+                        optional=getattr(value, "optional", False),
+                    )
+                )
+            )
         return cls(
-            inputs=tuple(FileEntry(local_path=path, optional=not required)
-                         for path, required in inputs),
-            outputs=tuple(FileEntry(local_path=path, optional=not required)
-                          for path, required in outputs),
+            inputs=tuple(FileEntry(local_path=path, optional=not required) for path, required in inputs),
+            outputs=tuple(FileEntry(local_path=path, optional=not required) for path, required in outputs),
             caches=tuple(caches),
+            stdin=None if stdin is None else FileEntry(local_path=stdin),
             stdout=None if stdout is None else FileEntry(local_path=stdout),
             stderr=None if stderr is None else FileEntry(local_path=stderr),
         ).initialize_availability()
@@ -255,23 +260,30 @@ class FileManifest:
         for name, cls in (("inputs", FileEntry), ("outputs", FileEntry), ("caches", CacheEntry)):
             items = getattr(self, name)
             object.__setattr__(
-                self, name,
+                self,
+                name,
                 tuple(item if isinstance(item, cls) else cls(**item) for item in items),
             )
-        for name in ("stdout", "stderr"):
+        for name in ("stdout", "stderr", "stdin"):
             item = getattr(self, name)
             if isinstance(item, dict):
                 object.__setattr__(self, name, FileEntry(**item))
+            elif item is not None and not isinstance(item, FileEntry):
+                raise TypeError(f"FileManifest.{name} must be a FileEntry or None")
         if isinstance(self.mapping, dict):
             object.__setattr__(self, "mapping", FileMapping(**self.mapping))
+        elif self.mapping is not None and not isinstance(self.mapping, FileMapping):
+            raise TypeError("FileManifest.mapping must be a FileMapping or None")
         for name in ("input_versions", "output_versions"):
             object.__setattr__(
-                self, name,
+                self,
+                name,
                 tuple(
                     version if isinstance(version, FileVersion) else FileVersion(**version)
                     for version in getattr(self, name)
                 ),
             )
+
     @property
     def artifacts(self):
         """Output streams, declared outputs and caches (one status per local file)."""
@@ -319,8 +331,7 @@ class FileManifest:
     def initialize_availability(self):
         """Mark declared downloadable files pending without marking inputs."""
         return self._map_artifacts(
-            lambda item: replace(item, availability_state="pending")
-            if item.availability_state is None else item
+            lambda item: replace(item, availability_state="pending") if item.availability_state is None else item
         )
 
     def _map_artifacts(self, transform):
@@ -333,8 +344,14 @@ class FileManifest:
         )
 
     def with_file_availability(
-        self, local_path, state, message=None, *,
-        remote_path=None, kind="output", source_pattern=None,
+        self,
+        local_path,
+        state,
+        message=None,
+        *,
+        remote_path=None,
+        kind="output",
+        source_pattern=None,
     ):
         """Update one artifact, adding each wildcard match as it is discovered.
 
@@ -343,19 +360,26 @@ class FileManifest:
         Duplicate stream/output declarations of one path are updated together.
         """
         import os
+
         path = os.fspath(local_path)
         matches = any(x.local_path == path for x in self.artifacts)
         if matches:
             return self._map_artifacts(
-                lambda item: replace(
-                    item,
-                    availability_state=state,
-                    availability_message=message,
-                ) if item.local_path == path else item
+                lambda item: (
+                    replace(
+                        item,
+                        availability_state=state,
+                        availability_message=message,
+                    )
+                    if item.local_path == path
+                    else item
+                )
             )
         file = FileEntry(
-            local_path=path, remote_path=remote_path,
-            availability_state=state, availability_message=message,
+            local_path=path,
+            remote_path=remote_path,
+            availability_state=state,
+            availability_message=message,
             source_pattern=source_pattern,
         )
         if kind == "output":
@@ -374,17 +398,16 @@ class FileManifest:
 
     @property
     def input_files(self):
-        return tuple(entry.local_path for entry in self.inputs if entry.local_path is not None)
+        entries = (*self.inputs, *((self.stdin,) if self.stdin is not None else ()))
+        return tuple(dict.fromkeys(entry.local_path for entry in entries if entry.local_path is not None))
 
     @property
     def output_files(self):
         streams = (self.stdout, self.stderr)
         entries = tuple(entry for entry in streams if entry is not None)
-        return tuple(dict.fromkeys(
-            entry.local_path
-            for entry in (*entries, *self.outputs)
-            if entry.local_path is not None
-        ))
+        return tuple(
+            dict.fromkeys(entry.local_path for entry in (*entries, *self.outputs) if entry.local_path is not None)
+        )
 
     @property
     def manifests(self):
@@ -392,10 +415,7 @@ class FileManifest:
 
     @property
     def all_versions(self):
-        by_path = {
-            str(item.path): item
-            for item in (*self.input_versions, *self.output_versions)
-        }
+        by_path = {str(item.path): item for item in (*self.input_versions, *self.output_versions)}
         return tuple(by_path[key] for key in sorted(by_path))
 
     @property

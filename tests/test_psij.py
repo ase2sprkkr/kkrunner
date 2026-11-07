@@ -381,7 +381,9 @@ def test_psij_project_manifest_marks_concrete_and_wildcard_files(monkeypatch, tm
 
 def test_psij_missing_optional_output_is_skipped(monkeypatch, tmp_path):
     executor = _executor(monkeypatch, _Backend())
-    files = FileManifest(outputs=(FileEntry(local_path=str(tmp_path / "optional.dat"), availability_state="pending"),))
+    files = FileManifest(
+        outputs=(FileEntry(local_path=str(tmp_path / "optional.dat"), optional=True, availability_state="pending"),)
+    )
     runner = executor.create_project_run(
         ExecutionSpec(argv=("program",), input_file=None, directory=str(tmp_path), output_file=None), run_id="optional"
     )
@@ -910,6 +912,7 @@ def test_psij_attached_new_status_does_not_resubmit(monkeypatch, tmp_path):
     output.write_bytes(b"existing output")
     record = _psij_run(tmp_path, "456")
     manager = ExecutionManager(RunStore(tmp_path / "history"))
+    (tmp_path / "run.err").write_text("")
     manager.store.save(record)
     run = manager.attach(record, executor=executor, process_result=lambda outcome: outcome)
     assert run._runner._runner.state is RunState.UNKNOWN
@@ -1036,6 +1039,8 @@ def test_psij_simultaneous_attaches_share_callback_and_finish(monkeypatch, tmp_p
     job.native_id = "shared"
     job.status = _Status("ACTIVE")
     executor._cache_submitted_job(job)
+    (tmp_path / "run.out").write_text("result")
+    (tmp_path / "run.err").write_text("")
     run = _psij_run(tmp_path, "shared")
     first = executor.attach(run, start=False)
     second = executor.attach(run, start=False)
@@ -1118,6 +1123,8 @@ def test_project_observer_detaches_without_stopping_other_attached_client(monkey
     record = _psij_run(tmp_path, "running-job")
     store = RunStore(tmp_path / "history")
     manager = ExecutionManager(store)
+    (tmp_path / "run.out").write_text("result")
+    (tmp_path / "run.err").write_text("")
     store.save(record)
     subscribed = threading.Event()
     num_subscribers = 0

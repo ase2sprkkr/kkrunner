@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from pathlib import Path
 from threading import Event
 import pytest
 from kkrunner import DuplicateSubmissionError, Executor, FileEntry, FileManifest, RunState, RunStore
@@ -102,6 +103,7 @@ def test_final_run_releases_submission_namespace(tmp_path):
     executor = _Executor()
     first = _run(manager, executor, tmp_path)
     first.submit()
+    (tmp_path / "case.out").write_text("result")
     executor.runners[0].finish()
     first.wait()
     assert manager.store.get(first.id).state == RunState.FINISHED

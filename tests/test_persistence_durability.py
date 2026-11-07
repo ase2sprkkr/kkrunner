@@ -3,6 +3,7 @@ import stat
 from pathlib import Path
 import pytest
 import kkrunner._durability as durability
+import kkrunner.records as records_module
 import kkrunner.manager as manager_module
 from kkrunner.base import RunState
 from kkrunner.endpoint import ExecutorEndpoint
@@ -65,13 +66,13 @@ def test_durable_mkdir_syncs_parent_directory_entries(tmp_path, monkeypatch, alr
 
 def test_run_store_uses_durable_json_writer(tmp_path, monkeypatch):
     calls = []
-    real_write = manager_module.durable_write_json
+    real_write = records_module.durable_write_json
 
     def tracked_write(path, data, **options):
         calls.append((Path(path), options))
         return real_write(path, data, **options)
 
-    monkeypatch.setattr(manager_module, "durable_write_json", tracked_write)
+    monkeypatch.setattr(records_module, "durable_write_json", tracked_write)
     store = RunStore(tmp_path / "runs")
     manager = ExecutionManager(store)
     record = manager.new_record(directory=tmp_path, metadata={"test": {"task": "SCF"}}, processing_required=True)

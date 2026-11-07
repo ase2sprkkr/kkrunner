@@ -52,7 +52,11 @@ def test_opaque_metadata_is_json_and_recursively_immutable(tmp_path):
     assert manager.store.get(record.id) == record
     with pytest.raises(ValueError, match="Backend identity"):
         manager.store.update(
-            record, lambda current: replace(current, execution=replace(current.execution, backend_id="different"))
+            record,
+            lambda current: replace(
+                current,
+                execution=replace(current.execution, backend_id="different"),
+            ),
         )
     with pytest.raises(TypeError):
         manager.new_record(directory=tmp_path, metadata={"example": object()})
@@ -131,7 +135,11 @@ def test_managed_execution_needs_no_result_processor(tmp_path, monkeypatch):
     manager = ExecutionManager(RunStore(tmp_path / "runs"))
     run = manager.create_run(
         LocalExecutor(),
-        ExecutionSpec([sys.executable, "-c", "print(42)"], directory=tmp_path, output_file=tmp_path / "stdout.txt"),
+        ExecutionSpec(
+            [sys.executable, "-c", "print(42)"],
+            directory=tmp_path,
+            output_file=tmp_path / "stdout.txt",
+        ),
     )
     assert isinstance(run.run(), ExecutionOutcome)
     record = manager.store.get(run.id)
@@ -144,10 +152,15 @@ def test_required_processing_can_be_supplied_after_restart(tmp_path, monkeypatch
     manager = ExecutionManager(RunStore(tmp_path / "runs"))
     run = manager.create_run(
         LocalExecutor(),
-        ExecutionSpec([sys.executable, "-c", "print(42)"], directory=tmp_path, output_file=tmp_path / "stdout.txt"),
+        ExecutionSpec(
+            [sys.executable, "-c", "print(42)"],
+            directory=tmp_path,
+            output_file=tmp_path / "stdout.txt",
+        ),
         processing_required=True,
     )
-    run.run()
+    with pytest.raises(ProcessingPending):
+        run.run()
     assert manager.store.get(run.id).state == RunState.POSTPROCESSING
     other = ExecutionManager(RunStore(manager.store.directory))
     attached = other.attach(run.id, process_result=lambda outcome: int(Path(outcome.output_file).read_text()))
@@ -216,3 +229,45 @@ def test_current_schema_rejects_invalid_field_types(tmp_path, field, value):
     with pytest.raises(CorruptRunRecord) as error:
         manager.store.get(record.id)
     assert str(path) in str(error.value)
+
+
+def test_failed_download_can_reattach_to_preserved_backend_receipt(tmp_path, monkeypatch):
+    from kkrunner import FailurePhase, LaunchSpec, LocalTransport, RemoteEndpointExecutor
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    local, remote = tmp_path / "local", tmp_path / "remote"
+    local.mkdir()
+    remote.mkdir()
+
+    class Transport(LocalTransport):
+        fail = True
+
+        async def get_file(self, source, destination):
+            if self.fail and str(source).endswith("answer.txt"):
+                raise OSError("interrupted download")
+            return await super().get_file(source, destination)
+
+    transport = Transport()
+    executor = RemoteEndpointExecutor(transport, command=(sys.executable, "-m", "kkrunner", "remote"))
+    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    run = manager.create_run(
+        executor,
+        ExecutionSpec(
+            [sys.executable, "-c", "from pathlib import Path; Path('answer.txt').write_text('42'); print('done')"],
+            directory=local,
+            output_file=local / "stdout",
+            output_files=(local / "answer.txt",),
+            launch=LaunchSpec(local_root=local, remote_root=remote),
+        ),
+    )
+    with pytest.raises(OSError, match="interrupted download"):
+        run.run()
+    failed = manager.store.get(run.id)
+    assert failed.failure_phase == FailurePhase.DOWNLOAD
+    assert failed.return_code == 0
+    transport.fail = False
+    manager.resume_download(failed)
+    attached = manager.attach(run.id, executor=executor)
+    assert attached.wait().return_code == 0
+    assert manager.store.get(run.id).state == RunState.FINISHED
+    assert (local / "answer.txt").read_text() == "42"
