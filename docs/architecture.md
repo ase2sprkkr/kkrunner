@@ -9,16 +9,16 @@ ExecutionResources and ResourceOwnedRunner. Public exports live in `kkrunner`.
 Both managers use the same lifecycle. Each public class has one name that
 describes its role.
 
-ASE2SPRKKR owns input preparation, executable selection, task definitions,
-template/callback resolution for TaskFile declarations, parsers, TaskResult and
-the `ase2sprkkr` application-metadata namespace. It depends on KKRunner.
-KKRunner depends only on platformdirs, plus optional psij-python.
+Applications own input preparation, executable selection, file-template
+resolution, parsers, result types and their own metadata namespace. KKRunner
+depends only on platformdirs, plus optional psij-python.
 
 TaskFile is an immutable declaration. Its `type` and `info` are opaque strings;
 KKRunner does not resolve application templates or consult format registries.
 FileEntry is a resolved persistent location plus transfer/publication state.
 FileManifest owns the authoritative declarations, cache baselines and captured
-versions. stdin is a separate read declaration and does not replace the primary input.
+versions. `input_file` identifies the main input for tracking and transfer;
+`stdin` selects the file connected to the process's standard input.
 Read/write conflicts derive exclusively from the manifest; task names
 have no locking meaning. Clients must declare every read/write/cache footprint.
 
@@ -30,8 +30,8 @@ subsequent changes use its atomic update API. Date sharding does not permit
 multiple records with the same ID.
 RunRecord schema_version is 1 throughout pre-release development, even when
 its structure changes. Only the current shape is accepted. Development records
-are not migrated. Old ASE2SPRKKR schema-3 records are intentionally unsupported;
-copying their JSON into the new store raises CorruptRunRecord. User configuration
+are not migrated. Earlier record formats are unsupported; copying their JSON
+into the current store raises CorruptRunRecord. User configuration
 and Project generation/versioning are separate contracts.
 
 Lifecycle: new -> submitting -> queued/running -> downloading (if required) ->
@@ -62,21 +62,19 @@ finishes; otherwise a later attach would lose authoritative backend completion. 
 fsync on POSIX; portable Windows directory durability is weaker as documented
 in `kkrunner.support.durability`. Invalid records raise errors, including during enumeration.
 
-Before submission the client/prepared calculation owns its open resources.
-Successful create_run transfers them to ResourceOwnedRunner. Creation/submission
-failure closes acquired resources, completion closes the owned resources, and
-cancellation before submission closes them without launching. Borrowed handles
-retain their existing ownership semantics. Managed execution uses file paths on
-the execution host; the supervisor owns process lifetime beyond client detach.
+Callers own the streams and resources they supply. To transfer their lifetime
+to a run, wrap its runner in ResourceOwnedRunner with ExecutionResources. The
+wrapper closes owned resources on completion and when submission is cancelled
+before launch. Borrowed handles retain their existing ownership semantics.
+Managed execution uses file paths on the execution host; the supervisor owns
+process lifetime beyond client detach.
 Temporary directories must remain available for backend execution and processing;
 clients must not delete them on mere loss of observation.
 
-The CLI is `kkrunner remote`. The original transport framing/control protocol is
-preserved and still rejects incompatible protocol versions. Worker module paths,
-default command, runtime namespace and PSI/J identity markers now belong to
-KKRunner. A remote host needs only KKRunner and the desired executable (plus
-PSI/J for scheduler use). `ase2sprkkr remote` delegates only the end-user status/follow/cancel subset.
-`kkrunner-remote` is an alternate entry point for the same protocol implementation.
+The target-side protocol command is `kkrunner remote`; it rejects incompatible
+control protocol versions. A remote host needs KKRunner and the desired
+executable, plus PSI/J for scheduler use. Application-specific command wrappers
+belong to the application; the protocol implementation remains in KKRunner.
 
 Application-specific preparation and historical result loading stay outside the
 runner. Applications retain their own parser and result-format registries and
@@ -85,6 +83,10 @@ working directories and artifacts for as long as execution or processing needs
 them. See the application guide for its storage policy and temporary-file rules.
 
 ## Reservations and filesystems
+
+For runs managed through the same RunStore, submission reserves declared file
+paths until the run reaches a terminal state. This applies with or without
+projects; raw executor runs do not take these reservations.
 
 Before reservation the remote executor resolves absolute target paths without
 staging or opening outputs. Only after the complete footprint has been durably
@@ -116,12 +118,6 @@ Managed local execution and the direct-process remote service require Linux
 before launching a process. Raw local subprocess execution and SSH clients have
 separate platform requirements; Windows-specific locking/durability code alone
 does not imply support for a managed local supervisor on Windows.
-
-ASE2SPRKKR retains project definitions in its original application state
-namespace, while new-format run records use KKRunner's state namespace. Explicit
-project repositories retain their colocated run store. Old development records
-are not migrated, silently ignored within a store, or rewritten.
-
 
 ## Package ownership
 

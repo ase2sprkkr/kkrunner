@@ -545,7 +545,14 @@ def _pathlike(value):
 
 @dataclass(frozen=True)
 class ExecutionSpec:
-    """Command, files and launch intent handed to an execution backend."""
+    """Command, files and launch intent handed to an execution backend.
+
+    Path-valued file fields are resolved relative to ``directory``. For
+    example, ``output_file="stdout.txt"`` saves stdout in that working directory.
+    ``input_file`` identifies the main input for tracking and transfer;
+    ``stdin`` selects the file connected to the process's standard input.
+    Declaring an input file does not add its name to ``argv`` or redirect stdin.
+    """
 
     argv: Sequence[str]
     input_file: Any = None

@@ -7,26 +7,31 @@ applications are needed there only when the command itself uses them.
 
 .. code-block:: python
 
+   from pathlib import Path
    from kkrunner import (
-       ExecutionSpec, LaunchSpec, RemoteEndpointExecutor, SshTransport,
+       ExecutionSpec, LaunchSpec, RemoteEndpointExecutor, RunManager, RunStore,
+       SshTransport,
    )
 
+   directory = Path("remote-example").absolute()
+   directory.mkdir(exist_ok=True)
+   manager = RunManager(RunStore(directory / "runs"))
    executor = RemoteEndpointExecutor(SshTransport("user@cluster"))
    spec = ExecutionSpec(
        ["python3", "-c", "print(42)"],
-       directory="/absolute/local/work",
-       output_file="/absolute/local/work/stdout.txt",
+       directory=directory,
+       output_file="stdout.txt",
        launch=LaunchSpec(
-           local_root="/absolute/local/work",
+           local_root=directory,
            remote_root="/absolute/remote/work",
        ),
    )
-   # Use an explicit RunManager or ProjectExecutionManager for reconnect.
    run = manager.create_run(executor, spec)
    run.run()
 
-The target directory is resolved before reservation. Uploads, output opening and
-submission start only after the full manifest footprint is reserved. All reads,
+For managed runs, the target directory is resolved before reservation. Uploads,
+output opening and submission start only after the declared files are reserved;
+see :doc:`files` for the scope of this coordination. All reads,
 writes and caches must be declared; undeclared executable side effects cannot
 be protected by KKRunner's reservations.
 
@@ -36,7 +41,7 @@ For a nonstandard installation, pass an explicit protocol command:
 
    executor = RemoteEndpointExecutor(
        SshTransport("user@cluster"),
-       command=("/opt/kkrunner/bin/kkrunner-remote",),
+       command=("/opt/kkrunner/bin/kkrunner", "remote"),
        filesystem_id="cluster-home",
    )
 
@@ -71,7 +76,7 @@ It is useful for development and does not require a second machine:
    outcome = executor.create_run(ExecutionSpec(
        [sys.executable, "-c", "print(44)"],
        directory=local,
-       output_file=local / "stdout.txt",
+       output_file="stdout.txt",
        launch=LaunchSpec(local_root=local, remote_root=remote),
    )).run()
    print(outcome.return_code)

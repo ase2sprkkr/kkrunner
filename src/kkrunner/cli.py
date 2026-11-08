@@ -164,12 +164,3 @@ def main():
 def user_parser(argument_parser):
     """Human-facing status/follow/cancel subset of the same remote service."""
     parser(argument_parser, user=True)
-
-
-def remote_main():
-    """Standalone machine-protocol executable, equivalent to kkrunner remote."""
-    import argparse
-
-    argument_parser = argparse.ArgumentParser(prog="kkrunner-remote")
-    parser(argument_parser)
-    run(argument_parser.parse_args(), None)

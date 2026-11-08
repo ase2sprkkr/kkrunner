@@ -1,12 +1,12 @@
 Command-line interface
 ========================
 
-KKRunner installs two equivalent machine-protocol entry points:
+``kkrunner`` is the installed command. Its ``remote`` subcommand runs the
+target-side execution protocol:
 
 .. code-block:: console
 
    kkrunner remote --help
-   kkrunner-remote --help
 
 Execution clients supply ``--protocol-version`` explicitly. The commands are
 ``submit``, ``status``, ``follow``, ``cancel``, ``recover``, ``ack-submit``, ``ack``
@@ -24,22 +24,11 @@ module):
 
 .. code-block:: console
 
-   kkrunner-remote --protocol-version VERSION status HANDLE
-   kkrunner-remote --protocol-version VERSION follow HANDLE
-   kkrunner-remote --protocol-version VERSION cancel HANDLE
+   kkrunner remote --protocol-version VERSION status HANDLE
+   kkrunner remote --protocol-version VERSION follow HANDLE
+   kkrunner remote --protocol-version VERSION cancel HANDLE
 
 These commands operate on the machine where they execute. For a remote handle,
 run them on the target, for example through SSH. ``follow`` replays output from
 byte offset zero by default; ``--live`` requests only new output. It accepts
 separate stdout/stderr offsets and ``--framed`` for binary multiplexing.
-
-ASE2SPRKKR exposes the human-facing subset with an implicit protocol version:
-
-.. code-block:: console
-
-   ase2sprkkr remote status HANDLE
-   ase2sprkkr remote follow HANDLE
-   ase2sprkkr remote cancel HANDLE
-
-There is one implementation of these operations in KKRunner. Application
-wrappers do not own submission protocols, durable receipts or worker processes.

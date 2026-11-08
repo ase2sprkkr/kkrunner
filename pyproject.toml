@@ -19,7 +19,6 @@ docs = ["sphinx>=7", "sphinx-rtd-theme>=3", "myst-parser>=3"]
 
 [project.scripts]
 kkrunner = "kkrunner.cli:main"
-kkrunner-remote = "kkrunner.cli:remote_main"
 
 [project.urls]
 Documentation = "https://ase2sprkkr.github.io/kkrunner/"

@@ -18,7 +18,7 @@ Commands are argument sequences, so shell expansion is not performed.
    spec = ExecutionSpec(
        [sys.executable, "-c", "print(42)"],
        directory=directory,
-       output_file=directory / "stdout.txt",
+       output_file="stdout.txt",
    )
    runner = LocalExecutor().create_run(spec)
    outcome = runner.run()
@@ -33,6 +33,10 @@ Commands are argument sequences, so shell expansion is not performed.
 .. testcleanup::
 
    workspace.cleanup()
+
+File paths in the specification are relative to ``directory``; here
+``"stdout.txt"`` names the file inside the temporary working directory.
+Absolute paths can be used when a file belongs elsewhere.
 
 ``outcome`` contains execution facts, including the backend return code and
 stream paths. It contains no application-specific parsed result. Required

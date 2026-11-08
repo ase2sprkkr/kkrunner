@@ -4,7 +4,7 @@ KKRunner
 KKRunner runs external programs locally, over SSH, or through a scheduler.
 It owns execution, declared files and durable run history. Your application
 owns input preparation, scientific interpretation and presentation.
-No ASE, NumPy or compiler is required for the core library.
+The core library requires only Python and ``platformdirs``.
 
 Start with :doc:`quickstart`. For restartable calculations, continue with
 :doc:`persistent-runs`; use :doc:`projects` when runs belong to named projects.
@@ -15,9 +15,9 @@ Start with :doc:`quickstart`. For restartable calculations, continue with
 
    installation
    quickstart
-   files
    persistent-runs
    projects
+   files
    backends
    remote
    command-line

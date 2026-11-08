@@ -2,9 +2,10 @@ Group runs in projects
 ========================
 
 Projects are optional. :class:`~kkrunner.ProjectRepository` stores project names,
-hierarchy and directories. :class:`~kkrunner.ProjectExecutionManager` requires
-an existing project and uses the same run lifecycle as
-:class:`~kkrunner.RunManager`; project metadata is not a second run store.
+hierarchy and working directories. :class:`~kkrunner.ProjectExecutionManager`
+associates runs with a selected project and uses the same persistence and
+reservations as :class:`~kkrunner.RunManager`. Project definitions and run
+records have separate stores.
 
 .. testcode::
 

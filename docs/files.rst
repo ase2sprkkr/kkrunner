@@ -1,14 +1,26 @@
-Declare the file footprint
-============================
+Declare the files a run uses
+==============================
 
-The manifest is the complete declaration of what a run may read or write.
-KKRunner reserves these paths before staging or opening outputs. It does not
-reserve a whole directory merely because two calculations share it.
+A file manifest lists the files a run may read, create or modify. KKRunner
+builds it from the file fields of :class:`~kkrunner.ExecutionSpec` and uses it
+for transfers, output checks, captured file versions and managed-run
+reservations. Declare all files the program uses; these declarations do not
+restrict the process's filesystem access.
 
-``input_file`` is the primary input; ``stdin`` is a separate read declaration.
-``output_file`` and ``error_file`` are stdout/stderr destinations. Use
-``input_files`` and ``output_files`` for other files, and ``cache_files`` for
-files read and potentially rewritten by the executable.
+File paths are relative to ``ExecutionSpec.directory``. Use a plain filename
+such as ``"stdout.txt"`` for a file in that directory, or an absolute path
+for a file elsewhere.
+
+* ``input_file`` identifies the program's main input file for tracking and
+  transfer. The command must still pass its name to the program if needed;
+  this field does not redirect standard input.
+* ``stdin`` supplies the file whose contents the process reads through standard
+  input. For example, ``stdin="input.txt"`` opens that file as the process's
+  stdin. It may name the same file as ``input_file``.
+* ``output_file`` and ``error_file`` save the process's stdout and stderr.
+* ``input_files`` declares additional files read by the program.
+* ``output_files`` declares additional files created by the program.
+* ``cache_files`` declares files the program may both read and rewrite.
 
 .. testcode::
 
@@ -21,12 +33,13 @@ files read and potentially rewritten by the executable.
    directory = Path(workspace.name)
    (directory / "input.txt").write_text("input")
    spec = ExecutionSpec(
-       [sys.executable, "-c", "print('example')"],
+       [sys.executable, "-c", "import sys; print(sys.stdin.read())"],
        directory=directory,
-       input_file=directory / "input.txt",
-       output_file=directory / "stdout.txt",
-       output_files=(TaskFile(directory / "optional.log", optional=True),),
-       cache_files=(directory / "cache.bin",),
+       input_file="input.txt",
+       stdin="input.txt",
+       output_file="stdout.txt",
+       output_files=(TaskFile("optional.log", optional=True),),
+       cache_files=("cache.bin",),
    )
    manifest = FileManifest.from_spec(spec)
    print(len(manifest.inputs), len(manifest.outputs), len(manifest.caches))
@@ -42,13 +55,28 @@ files read and potentially rewritten by the executable.
    workspace.cleanup()
 
 ``TaskFile`` is immutable. Its ``type`` and ``info`` strings belong to the
-application; KKRunner does not look up scientific formats. Applications must
+application; KKRunner does not look up file formats. Applications must
 resolve pathname templates and callbacks before handing a concrete execution
-specification to the runner. A callback returning ``None`` means no declaration;
-an optional declared file may be absent after successful execution.
+specification to the runner. An optional declared file may be absent after
+successful execution.
 
 Reservations
 --------------
+
+Reservations prevent a managed run from overwriting files another managed run
+still needs. They cover the declared read and write paths, including caches,
+stdout/stderr and transfer destinations; sharing a working directory does not
+reserve the entire directory.
+
+A runner created by ``RunManager.create_run`` reserves its files at ``submit()``,
+before uploads, opening outputs or starting the command. The reservation lasts
+until the managed run reaches a terminal state, including any transfers and
+required result processing. Detaching observation does not release it.
+
+Coordination applies to runs in the same ``RunStore``, even when different
+manager instances or projects use that store. ``ProjectExecutionManager`` uses
+the same mechanism. Raw ``executor.create_run`` calls and separate stores do
+not coordinate these reservations.
 
 Two active runs may read the same file. A write conflicts with another run's
 read or write. Cache declarations participate in both roles. Local uploads,

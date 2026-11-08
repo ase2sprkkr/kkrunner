@@ -2,28 +2,36 @@ Installation
 ==============
 
 KKRunner supports Python 3.9 and newer. The core depends on ``platformdirs``;
-PSI/J and documentation tools are optional extras.
+scheduler support and documentation tools are optional extras.
+
+For this development alpha, install from a KKRunner checkout or a supplied
+wheel. From the root of the checkout:
 
 .. code-block:: console
 
-   python -m pip install kkrunner
-   python -m pip install 'kkrunner[psij]'  # Slurm, PBS and other PSI/J backends
+   python -m venv .venv
+   . .venv/bin/activate
+   python -m pip install .
 
-For source development, install KKRunner before ASE2SPRKKR. Run the following
-from the ASE2SPRKKR checkout:
+This installs a copy of the package. If you are editing its source, use
+``python -m pip install --editable .`` instead; changes to Python files then
+apply without reinstalling. To install a supplied wheel, pass its pathname
+to ``python -m pip install``.
+
+For PSI/J scheduler backends, install the extra:
 
 .. code-block:: console
 
-   python -m pip install -e "<path-to-kkrunner>"
-   python -m pip install -e .
+   python -m pip install '.[psij]'
 
-Replace ``<path-to-kkrunner>`` with the location of your KKRunner checkout.
+For documentation dependencies and the local HTML build, see
+:ref:`build-documentation`.
 
-Install the same KKRunner release on the SSH target. The remote command must
-be available in the noninteractive SSH environment; an absolute path to
-``kkrunner-remote`` can be supplied explicitly. Scheduler execution also needs
-the optional PSI/J dependency and a configured scheduler on the execution host.
-MPI execution needs an MPI launcher compatible with the application executable.
+For SSH execution, install the same KKRunner version on the target and make
+``kkrunner remote`` available to noninteractive SSH commands. An absolute
+command can be supplied as ``("/opt/kkrunner/bin/kkrunner", "remote")``.
+Scheduler execution needs the PSI/J extra and a configured scheduler on the
+execution host. MPI execution needs a compatible MPI launcher there.
 
 Platforms
 -----------

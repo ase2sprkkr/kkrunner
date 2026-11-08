@@ -34,7 +34,7 @@ raw = LocalExecutor().create_run(
     ExecutionSpec(
         [sys.executable, "-c", "print(42)"],
         directory=root,
-        output_file=root / "raw.out",
+        output_file="raw.out",
     )
 )
 assert raw.run().return_code == 0
@@ -48,7 +48,7 @@ run = manager.create_run(
     ExecutionSpec(
         [sys.executable, "-c", "print(43)"],
         directory=root,
-        output_file=root / "managed.out",
+        output_file="managed.out",
     ),
     processing_required=True,
 )
@@ -65,19 +65,21 @@ assert restarted.store.get(run.id).state == RunState.FINISHED
 local, remote = root / "local", root / "remote"
 local.mkdir()
 remote.mkdir()
-executor = RemoteEndpointExecutor(LocalTransport(), command=(str(Path(sys.executable).parent / "kkrunner-remote"),))
+executor = RemoteEndpointExecutor(LocalTransport(), command=(str(Path(sys.executable).parent / "kkrunner"), "remote"))
 run = executor.create_run(
     ExecutionSpec(
         [sys.executable, "-c", "print(44)"],
         directory=local,
-        output_file=local / "remote.out",
+        output_file="remote.out",
         launch=LaunchSpec(local_root=local, remote_root=remote),
     )
 )
 assert run.run().return_code == 0
 assert (local / "remote.out").read_text() == "44\n"
-for command in ("kkrunner", "kkrunner-remote"):
-    subprocess.run([str(Path(sys.executable).parent / command), "--help"], check=True, stdout=subprocess.DEVNULL)
+commands = {entry.name for entry in md.distribution("kkrunner").entry_points if entry.group == "console_scripts"}
+assert commands == {"kkrunner"}, commands
+for arguments in (("--help",), ("remote", "--help")):
+    subprocess.run([str(Path(sys.executable).parent / "kkrunner"), *arguments], check=True, stdout=subprocess.DEVNULL)
 print(
     json.dumps(
         {

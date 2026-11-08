@@ -1,36 +1,34 @@
-Development, documentation and releases
-=========================================
+Development and documentation
+================================
 
-Build distributions
----------------------
+Install and test a checkout
+-----------------------------
 
-.. code-block:: console
-
-   python -m pip install build twine
-   python -m build
-   python -m twine check dist/*
-
-The default build first produces an sdist, then builds its wheel. The source
-archive includes documentation sources, tests and Docker fixtures. Build and
-install the wheel in a separate environment; run the tests from the unpacked
-source archive so an editable install cannot hide missing distribution files.
+Use a virtual environment as described in :doc:`installation`. Install an
+editable checkout with the test dependencies:
 
 .. code-block:: console
 
-   python -m pip install '.[test]'
+   python -m pip install --editable '.[test]'
    python -m pytest -q
-   KKRUNNER_RUN_DOCKER_TESTS=1 python -m pytest -q tests/test_ssh_standalone.py tests/test_psij_slurm.py
 
 The optional integration cases require Docker and test real SSH reconnect and
-PSI/J Slurm execution. Subprocess, Unix-socket and process-group support are
-required for the managed execution tests.
+PSI/J Slurm execution:
+
+.. code-block:: console
+
+   KKRUNNER_RUN_DOCKER_TESTS=1 python -m pytest -q tests/test_ssh_standalone.py tests/test_psij_slurm.py
+
+Managed execution tests need Linux, Unix sockets and process groups.
+
+.. _build-documentation:
 
 Build the documentation
 -------------------------
 
-The documentation uses Sphinx, the Read the Docs theme, autodoc and autosummary,
-as in ASE2SPRKKR. MyST renders the Markdown architecture page. Documentation
-tools are isolated in the ``docs`` extra; they are not runtime dependencies.
+The documentation uses Sphinx, the Read the Docs theme, autodoc and autosummary.
+MyST renders the Markdown architecture page. These tools are supplied by the
+``docs`` extra.
 
 .. code-block:: console
 
@@ -46,7 +44,7 @@ Open ``build/docs/html/index.html``. ``make docs`` treats Sphinx warnings as
 errors; ``make docs-test`` executes the guide's examples, including managed
 reconnect and the remote protocol through ``LocalTransport``. Both build against
 the installed distribution and do not inject the source directory into imports.
-The documentation CI repeats those checks on the wheel with no ASE installed,
+The documentation CI repeats those checks on an isolated wheel installation,
 uploads the rendered HTML as an artifact, and deploys it to GitHub Pages from
 ``master``.
 
@@ -56,6 +54,23 @@ source docstrings and guide pages, rather than generated files in
 the test commands above describe how to verify a current checkout. Historical
 review and measurement snapshots are kept separately in ``docs/remarks`` and
 are excluded from the published manual.
+
+Build distributable archives
+-------------------------------
+
+This step is for sharing or publishing a package. Installing or developing a
+checkout only needs the ``pip install`` commands above.
+
+.. code-block:: console
+
+   python -m pip install build
+   python -m build
+
+The first command installs the build tool. The second creates a source archive
+(``sdist``) in ``dist/`` and builds an installable wheel from that archive.
+The archive includes documentation sources, tests and Docker fixtures. CI
+checks package metadata and tests the installed wheel using the unpacked
+archive, so an editable checkout cannot hide missing distribution files.
 
 Development alpha and public publication
 -------------------------------------------

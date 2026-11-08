@@ -1,15 +1,42 @@
 Persistent runs and recovery
 ==============================
 
-Use :class:`~kkrunner.RunManager` with an explicit :class:`~kkrunner.RunStore`
-when persistence does not require projects. A managed runner writes one
-:class:`~kkrunner.RunRecord` containing identity, execution facts, file manifest,
-metadata and lifecycle state. The backend stores submission/outcome receipts;
-it does not own the end-to-end run record.
+A calculation can keep running after its controlling Python client exits.
+With a supported backend, KKRunner can reconnect to that existing process or
+scheduler job and continue monitoring, file downloads and result processing.
+Reconnecting does not restart a process that has been killed. Keep the run
+store, working files and backend service available; :ref:`backend-recovery`
+describes the requirements for each backend.
 
-The manager returns a :class:`~kkrunner.PersistentRunner`. Project membership is
-optional, and one store can contain runs belonging to different projects as
-well as runs with no project.
+A **run** includes the command execution and any transfers or application
+processing needed to obtain its result. A scheduler **job** is the execution
+part of that run. The backend process may have finished while the run is still
+downloading files or processing results.
+
+:class:`~kkrunner.RunStore` stores durable :class:`~kkrunner.RunRecord` objects
+in a directory. Each record contains a stable run ID, backend identity, file
+manifest and lifecycle state. :class:`~kkrunner.RunManager` creates managed
+runs backed by that store and returns a :class:`~kkrunner.PersistentRunner`.
+Use ``manager.create_run(executor, spec)`` and ``run.submit()`` to start one.
+After restarting the client, reopen the same store and call
+``manager.attach(run_id)`` to continue a nonterminal run.
+
+Projects optionally group these runs by name and working directory.
+:class:`~kkrunner.ProjectExecutionManager` adds project membership to the same
+lifecycle; persistence does not require a project. See :doc:`projects`.
+
+Result processing
+-------------------
+
+``process_result`` consumes an :class:`~kkrunner.ExecutionOutcome` and returns
+an application result. It is separate from the completion-notification callback.
+``processing_required=True`` allows supplying the processor after reconnect.
+If the processor is unavailable or another client owns/performed processing,
+``wait()`` raises :class:`~kkrunner.ProcessingPending`; it must not substitute a
+raw outcome for the application's result type.
+
+This example lets the command finish, then recreates the client and supplies
+its missing result processor. The command is not submitted again:
 
 .. testcode::
 
@@ -28,10 +55,9 @@ well as runs with no project.
        ExecutionSpec(
            [sys.executable, "-c", "print(43)"],
            directory=directory,
-           output_file=directory / "stdout.txt",
+           output_file="stdout.txt",
        ),
        processing_required=True,
-       metadata={"example": {"parser": "integer"}},
    )
    try:
        run.run()
@@ -56,16 +82,6 @@ well as runs with no project.
 .. testcleanup::
 
    workspace.cleanup()
-
-Result processing
--------------------
-
-``process_result`` consumes an :class:`~kkrunner.ExecutionOutcome` and returns
-an application result. It is separate from the completion-notification callback.
-``processing_required=True`` allows supplying the processor after reconnect.
-If the processor is unavailable or another client owns/performed processing,
-``wait()`` raises :class:`~kkrunner.ProcessingPending`; it must not substitute a
-raw outcome for the application's result type.
 
 Processing ownership uses an OS lock and a persisted attempt token. Observing
 or refreshing a record does not take ownership. A crash can cause a later

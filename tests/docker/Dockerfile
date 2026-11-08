@@ -59,5 +59,4 @@ COPY src /workspace/kkrunner/src
 COPY tests/docker/psij_slurm_test_in_docker.py /workspace/kkrunner/tests/docker/
 RUN pip wheel --no-build-isolation --no-deps --wheel-dir /tmp/wheels /workspace/kkrunner \
     && pip install --no-deps /tmp/wheels/kkrunner-*.whl \
-    && rm -rf /workspace/kkrunner/src \
-    && ln -s /opt/venv/bin/kkrunner-remote /usr/local/bin/kkrunner-remote
+    && rm -rf /workspace/kkrunner/src
