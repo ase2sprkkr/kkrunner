@@ -7,6 +7,7 @@ import pytest
 from kkrunner.files import FileEntry, FileManifest
 from kkrunner.projects.manager import ProjectExecutionManager
 from kkrunner.projects.repository import ProjectDeleteError, ProjectRepository
+from kkrunner.projects.resolution import resolve_project_manager
 from kkrunner.runs.base import RunState
 from kkrunner.runs.manager import DuplicateSubmissionError
 from kkrunner.runs.records import RunStore
@@ -72,6 +73,7 @@ def test_for_project_preserves_explicit_run_store(tmp_path):
     assert bound.submitting_grace == 17
     assert bound.executor_pool is original.executor_pool
     assert bound.for_project(project) is bound
+    assert resolve_project_manager(bound) is bound
     record = bound.new_record(directory=tmp_path / "work", metadata={"test": {"task": "DOS"}}, processing_required=True)
     bound.store.save(record)
     assert custom_store.get(record.id) == record

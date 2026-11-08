@@ -112,3 +112,10 @@ def test_facade_exports_resolve_without_optional_scheduler_dependency():
             assert getattr(package, name) is not None, (package.__name__, name)
     with pytest.raises(AttributeError, match="has no attribute"):
         _ = kkrunner.backends.not_a_backend
+
+
+def test_generic_manager_has_no_application_methods():
+    from kkrunner.runs.manager import RunManager
+
+    assert not hasattr(RunManager, "load_result")
+    assert not hasattr(RunManager, "attach_sprkkr")

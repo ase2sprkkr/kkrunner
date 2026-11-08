@@ -99,3 +99,15 @@ def test_cancel_during_submit_is_dispatched_after_submission():
     assert runner.state == RunState.CANCELLED
     runner.cancel()
     assert backend.cancelled == 1
+
+
+def test_cancel_started_run_does_not_close_resources_before_monitor_finishes():
+    backend = _BackendRunner()
+    backend.state = RunState.RUNNING
+    resource = _Resource()
+    resources = ExecutionResources(resource)
+    runner = ResourceOwnedRunner(backend, resources)
+    runner.cancel()
+    assert runner.state == RunState.CANCELLED
+    assert not resources.closed
+    assert not resource.closed

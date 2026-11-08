@@ -1,10 +1,16 @@
+import asyncio
 import json
+import warnings
 from dataclasses import asdict
 
 import pytest
 
+from kkrunner import ExecutionSpec
+from kkrunner.backends import LocalExecutor
 from kkrunner.backends import mpi as mpi_runtime
-from kkrunner.runs.base import LaunchSpec
+from kkrunner.backends.local import materialize_local_spec
+from kkrunner.remote import RemoteEndpointExecutor
+from kkrunner.runs.base import LaunchSpec, MpiNotFoundWarning, MpiSpec
 
 
 @pytest.mark.parametrize(
@@ -101,3 +107,114 @@ def test_resolver_rejects_unparsed_mpi_values():
         assert "MpiSpec" in str(exc)
     else:
         raise AssertionError("raw MPI values must be normalized before resolution")
+
+
+def test_mpi_process_count_is_portable_launch_intent():
+    assert LocalExecutor().resolve_mpi(16) == LaunchSpec(mpi=MpiSpec(required=True, autodetect=True, process_count=16))
+
+
+def test_local_executor_materializes_mpi_on_execution_host(monkeypatch, tmp_path):
+    monkeypatch.setattr("kkrunner.backends.mpi.find_default_mpi_launcher", lambda: ("srun",))
+    input_file = (tmp_path / "run.inp").open("w+")
+    spec = ExecutionSpec(
+        argv=("serial-program",),
+        mpi_argv=("parallel-program", input_file.name),
+        launch=LaunchSpec.from_mpi(16),
+        input_file=input_file,
+        output_file=None,
+        directory=str(tmp_path),
+        stdin=input_file,
+    )
+    resolved = materialize_local_spec(spec)
+    assert resolved.argv == ("srun", "-n", "16", "parallel-program", input_file.name)
+    assert resolved.stdin is input_file
+    input_file.close()
+
+
+def test_required_local_mpi_without_launcher_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr("kkrunner.backends.mpi.find_default_mpi_launcher", lambda: None)
+    input_file = (tmp_path / "run.inp").open("w+")
+    spec = ExecutionSpec(
+        argv=("serial-program",),
+        mpi_argv=("parallel-program", input_file.name),
+        launch=LaunchSpec.from_mpi(True),
+        input_file=input_file,
+        output_file=None,
+        directory=str(tmp_path),
+        stdin=input_file,
+    )
+    with pytest.raises(FileNotFoundError, match="no MPI launcher"):
+        materialize_local_spec(spec)
+    input_file.close()
+
+
+@pytest.mark.parametrize("warn", (True, False), ids=("warn", "silent"))
+def test_local_auto_mpi_fallback_respects_warning_option(monkeypatch, tmp_path, warn):
+    monkeypatch.setattr("kkrunner.backends.local_process.resolve_mpi_command", lambda mpi: None)
+    input_file = (tmp_path / "run.inp").open("w+")
+    spec = ExecutionSpec(
+        argv=("serial-program",),
+        mpi_argv=("parallel-program", input_file.name),
+        launch=LaunchSpec(mpi=MpiSpec(autodetect=True, warning=warn)),
+        input_file=input_file,
+        output_file=None,
+        directory=str(tmp_path),
+        stdin=input_file,
+    )
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            resolved = materialize_local_spec(spec)
+        assert len(caught) == int(warn)
+        if warn:
+            assert issubclass(caught[0].category, MpiNotFoundWarning)
+            assert "without MPI" in str(caught[0].message)
+        assert resolved.argv == ("serial-program",)
+        assert resolved.stdin is input_file
+    finally:
+        input_file.close()
+
+
+@pytest.mark.parametrize("warn", (True, False), ids=("warn", "silent"))
+def test_remote_endpoint_mpi_warning_probe_respects_option(monkeypatch, warn):
+    endpoint = object.__new__(RemoteEndpointExecutor)
+    endpoint.backend = "local"
+    calls = []
+
+    async def request(action, *args, payload=None):
+        calls.append((action, args, payload))
+        if action == "resolve-mpi":
+            return {"mpi": None}
+        return {"state": "queued", "directory": "/remote/run"}
+
+    monkeypatch.setattr(endpoint, "_json_request", request)
+    payload = {
+        "directory": "/remote/run",
+        "launch": {
+            "mpi": {"required": False, "autodetect": True, "launcher": [], "process_count": None, "warning": warn}
+        },
+    }
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        asyncio.run(endpoint._submit(payload))
+    assert [call[0] for call in calls] == (["resolve-mpi", "submit"] if warn else ["submit"])
+    assert len(caught) == int(warn)
+    if warn:
+        assert issubclass(caught[0].category, MpiNotFoundWarning)
+        assert "remote host" in str(caught[0].message)
+
+
+def test_mpi_stdin_is_explicit_and_serial_fallback_is_unchanged(monkeypatch, tmp_path):
+    monkeypatch.setattr("kkrunner.backends.local_process.resolve_mpi_command", lambda mpi: ("mpirun",))
+    spec = ExecutionSpec(
+        argv=("serial",),
+        mpi_argv=("parallel",),
+        launch=LaunchSpec.from_mpi(True),
+        input_file=None,
+        output_file=None,
+        directory=str(tmp_path),
+        stdin=str(tmp_path / "separate-stdin.dat"),
+    )
+    assert materialize_local_spec(spec).stdin == spec.stdin
+    disabled = materialize_local_spec(__import__("dataclasses").replace(spec, mpi_uses_stdin=False))
+    assert disabled.stdin is None
