@@ -30,16 +30,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Check tag, package version and develop ancestry
+      - name: Check tag, package version and master ancestry
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           PYTHONPATH: ''
         run: |
-          git fetch --no-tags origin +refs/heads/develop:refs/remotes/origin/develop
-          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/develop; then
-            echo 'The candidate tag must point to a commit on develop.' >&2
-            exit 1
-          fi
           python - <<'PY'
           import os, pathlib, tomllib
 

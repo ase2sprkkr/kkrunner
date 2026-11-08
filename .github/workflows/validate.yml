@@ -3,6 +3,10 @@ name: Validate distribution
 on:
   workflow_call:
     inputs:
+      run-runtime-tests:
+        description: Run the Linux and macOS runtime matrices in addition to documentation checks
+        type: boolean
+        default: true
       upload-pages:
         description: Upload the validated documentation for a Pages deployment
         type: boolean
@@ -15,20 +19,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: python -m pip install build twine
       - run: python -m build
       - run: python -m twine check dist/*
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: python-distributions
           path: dist/*
           if-no-files-found: error
 
   runtime:
+    if: inputs.run-runtime-tests
     needs: build
     # setup-python has no Python 3.9 build for Ubuntu 26.04 (ubuntu-latest).
     runs-on: ubuntu-24.04
@@ -37,10 +42,10 @@ jobs:
       matrix:
         python: ['3.9', '3.12', '3.14']
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: python-distributions
           path: dist/
@@ -75,6 +80,7 @@ jobs:
           PY
 
   macos:
+    if: inputs.run-runtime-tests
     needs: build
     runs-on: ${{ matrix.os }}
     strategy:
@@ -82,10 +88,10 @@ jobs:
       matrix:
         os: [macos-15, macos-15-intel]
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: python-distributions
           path: dist/
@@ -132,10 +138,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: python-distributions
           path: dist/
@@ -166,12 +172,12 @@ jobs:
           subprocess.run(['make', 'docs-test'], cwd=root, check=True)
           shutil.copytree(root / 'build/docs/html', 'site')
           PY
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: documentation-html
           path: site/
           if-no-files-found: error
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         if: inputs.upload-pages
         with:
           path: site/

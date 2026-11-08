@@ -86,9 +86,9 @@ See [development](docs/development.rst) for test scope and packaging details.
 
 ## Publish to PyPI
 
-The `publish-pypi.yml` workflow runs on a `v<version>` tag whose version exactly matches `[project].version` in
-`pyproject.toml`; its commit must be on `develop`. Before the first release,
-create and push the `develop` branch in the KKRunner repository.
+The `publish-pypi.yml` workflow runs on a `v<version>` tag from any branch.
+The tag must exactly match `[project].version` in `pyproject.toml`; publication
+is independent of branch names.
 The version is defined in `pyproject.toml`; `kkrunner.__version__` reads the
 installed distribution metadata automatically.
 
@@ -98,7 +98,7 @@ Configure a PyPI Trusted Publisher for project `kkrunner`, GitHub owner
 tag rules. If hosted under another owner, use that owner in
 the publisher configuration. No PyPI API token is needed.
 
-The workflow verifies the tag and ancestry, builds one source archive and wheel,
+The workflow verifies the tag, builds one source archive and wheel,
 then tests that wheel on Python 3.9, 3.12 and 3.14 and builds/tests the documentation.
 Only after all checks pass does the publish job upload those exact artifacts
 using the `pypi` environment and GitHub's OIDC token.
@@ -128,9 +128,12 @@ Use the same Python for dependency installation and Makefile targets; the
 persistent execution, manifests, projects, schedulers, remote execution and the
 CLI; [development](docs/development.rst) covers builds and releases. Generated
 API pages and HTML are not committed. CI validates documentation against the
-installed wheel, uploads the HTML artifact and deploys it to GitHub Pages on
-`master`. Enable **Settings → Pages → Build and deployment → GitHub Actions**
-and allow `master` in the `github-pages` environment deployment rules.
+installed wheel and uploads the HTML artifact. The separate documentation
+workflow checks the same wheel and documentation, omits the runtime test
+matrices, and deploys to GitHub Pages for `v*` tags or manual runs. Enable
+**Settings → Pages → Build and deployment → GitHub Actions** and allow release
+tags and manually selected source branches in the `github-pages` environment
+deployment rules.
 
 Source provenance is recorded in [development remarks](docs/remarks/source-provenance.md);
 the license is in [LICENCE](LICENCE).
