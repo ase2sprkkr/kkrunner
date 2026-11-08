@@ -1,8 +1,8 @@
-name: Distribution, runtime and documentation
+name: Publish documentation
 
 on:
   push:
-    branches: ['**']
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -13,12 +13,10 @@ jobs:
   validate:
     uses: ./.github/workflows/validate.yml
     with:
-      upload-pages: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master' }}
-
+      upload-pages: true
   deploy:
     name: Deploy documentation to GitHub Pages
     needs: validate
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     concurrency:
       group: github-pages
