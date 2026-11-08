@@ -1,8 +1,8 @@
 name: Publish documentation
 
 on:
-  push:
-    tags: ['v*']
+  release:
+    types: [released]
   workflow_dispatch:
 
 permissions:
