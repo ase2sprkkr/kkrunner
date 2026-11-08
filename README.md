@@ -86,8 +86,9 @@ See [development](docs/development.rst) for test scope and packaging details.
 
 The `publish-pypi.yml` workflow runs on a `v<version>` tag whose version exactly matches `[project].version` in
 `pyproject.toml`; its commit must be on `develop`. Before the first release,
-create and push the `develop` branch in the KKRunner repository. Keep
-`kkrunner.__version__` in sync with the package version.
+create and push the `develop` branch in the KKRunner repository.
+The version is defined in `pyproject.toml`; `kkrunner.__version__` reads the
+installed distribution metadata automatically.
 
 Configure a PyPI Trusted Publisher for project `kkrunner`, GitHub owner
 `ase2sprkkr`, repository `kkrunner`, workflow `publish-pypi.yml` and environment
@@ -100,7 +101,7 @@ then tests that wheel on Python 3.9, 3.12 and 3.14 and builds/tests the document
 Only after all checks pass does the publish job upload those exact artifacts
 using the `pypi` environment and GitHub's OIDC token.
 
-For the initial nonpublic alpha, keep `0.1.0.dev0` and do not push a version tag.
+For nonpublic evaluation, use a prerelease version and do not push a version tag.
 Branch CI retains wheel/sdist artifacts for evaluation. Use access-controlled
 storage when sharing with testers: GitHub artifacts in a public repository are
 not private, and an upload to PyPI is public even for a development version.

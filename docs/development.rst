@@ -73,12 +73,12 @@ The archive includes documentation sources, tests and Docker fixtures. CI
 checks package metadata and tests the installed wheel using the unpacked
 archive, so an editable checkout cannot hide missing distribution files.
 
-Development alpha and public publication
--------------------------------------------
+Prereleases and publication
+-----------------------------
 
-The current version is a development prerelease, ``0.1.0.dev0``. It does not
+The installed version is |release|. It does not
 promise a stable API or stable persisted development formats. For the first
-nonpublic alpha, share the validated wheel and source archive through storage
+nonpublic evaluation, share the validated wheel and source archive through storage
 whose access is restricted to the intended testers. GitHub workflow artifacts
 follow repository access: artifacts in a public repository are not private.
 A development version alone does not make an upload private.
@@ -86,9 +86,10 @@ A development version alone does not make an upload private.
 Ordinary branch pushes and pull requests run checks and retain artifacts.
 A ``v<project.version>`` tag starts ``publish-pypi.yml`` and, after successful
 validation, uploads to public PyPI. Do not push such a tag for the nonpublic
-alpha. The workflow does not create a GitHub Release. The tag must point to a
-commit contained in remote ``develop``; the runtime version must match
-``pyproject.toml``. Commit all candidate files before tagging.
+evaluation. The workflow does not create a GitHub Release. The tag must point to a
+commit contained in remote ``develop``. The version is defined in
+``pyproject.toml``; ``kkrunner.__version__`` reads the installed distribution's
+metadata. Commit all candidate files before tagging.
 
 ``validate.yml`` builds one wheel and source archive. Its Linux Python 3.9, 3.12
 and 3.14 jobs install that same wheel, run the smoke test outside the checkout

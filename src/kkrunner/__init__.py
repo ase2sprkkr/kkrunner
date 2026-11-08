@@ -1,5 +1,6 @@
 """Program-independent execution, file manifests and durable run management."""
 
+from kkrunner._version import __version__
 from kkrunner.backends.endpoint import ExecutorEndpoint
 from kkrunner.backends.local import LocalExecutor, LocalRunner
 from kkrunner.backends.pool import ExecutorPool, default_executor_pool
@@ -104,6 +105,4 @@ __all__ = [
     "SshTransport",
 ]
 
-
-__version__ = "0.1.0.dev0"
 __all__ += ["TaskFile", "ProcessingPending", "HistoricalFileMismatchError"]

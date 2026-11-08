@@ -41,19 +41,12 @@ jobs:
             exit 1
           fi
           python - <<'PY'
-          import ast, os, pathlib, tomllib
+          import os, pathlib, tomllib
 
           version = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']
           expected = f'v{version}'
           if os.environ['RELEASE_TAG'] != expected:
               raise SystemExit(f'Tag must be {expected}, not {os.environ["RELEASE_TAG"]}')
-          module = ast.parse(pathlib.Path('src/kkrunner/__init__.py').read_text())
-          runtime_version = next(ast.literal_eval(node.value) for node in module.body
-                                 if isinstance(node, ast.Assign)
-                                 and any(isinstance(t, ast.Name) and t.id == '__version__'
-                                         for t in node.targets))
-          if runtime_version != version:
-              raise SystemExit('Runtime and distribution versions differ')
           PY
 
   validate:
