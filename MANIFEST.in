@@ -1,4 +1,5 @@
-include LICENCE README.md
-recursive-include docs *.md
+include LICENCE README.md Makefile
+recursive-include docs *.md *.rst *.py
+prune docs/_generated
 recursive-include tests *.py *.sh *.conf Dockerfile
 global-exclude *.py[cod]

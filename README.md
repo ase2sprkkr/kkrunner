@@ -11,12 +11,15 @@ kkrunner remote --help
 kkrunner-remote --help  # equivalent standalone protocol executable
 ```
 
-For a source checkout alongside ASE2SPRKKR, install this project first:
+For source development, install KKRunner before ASE2SPRKKR. Run the following
+from the ASE2SPRKKR checkout:
 
 ```sh
-python -m pip install -e ../kkrunner
-python -m pip install -e .  # from the ASE2SPRKKR checkout
+python -m pip install -e "<path-to-kkrunner>"
+python -m pip install -e .
 ```
+
+Replace `<path-to-kkrunner>` with the location of your KKRunner checkout.
 
 ## Raw execution
 
@@ -34,13 +37,13 @@ assert outcome.return_code == 0
 ```python
 import sys
 from pathlib import Path
-from kkrunner import ExecutionManager, ExecutionSpec, LocalExecutor, ProjectRepository
+from kkrunner import ProjectExecutionManager, ExecutionSpec, LocalExecutor, ProjectRepository
 
 root = Path('example').absolute()
 root.mkdir(exist_ok=True)
 projects = ProjectRepository(root / 'projects')
 project = projects.create('Example', directory=root)
-manager = ExecutionManager(project_repository=projects, project=project)
+manager = ProjectExecutionManager(project_repository=projects, project=project)
 run = manager.create_run(
     LocalExecutor(),
     ExecutionSpec([sys.executable, '-c', 'print(42)'],
@@ -67,7 +70,8 @@ processing against the captured files without submitting another process.
 `run.cancel()` requests backend cancellation. Untracked raw local runs have no
 restart/reconnect guarantee; managed local runs use the same supervisor as SSH.
 
-See [architecture](docs/architecture.md) for ownership, recovery and format rules.
+See the [documentation guide](docs/index.rst) and [architecture](docs/architecture.md)
+for usage, ownership, recovery and format rules.
 
 ## End-user commands from ASE2SPRKKR
 
@@ -109,6 +113,51 @@ the unpacked source archive's tests against the installed wheel on Python 3.9,
 3.12 and 3.14. The Docker test image also executes only the installed artifact.
 
 Use `RunManager` for a project-free store and `ProjectExecutionManager` for
-project-bound runs. The previous ExecutionManager names are compatibility aliases.
-See the architecture document for processing ownership, filesystem identities
+project-bound runs. See the architecture document for processing ownership, filesystem identities
 and the Linux requirement for managed local execution.
+
+## Publish to PyPI
+
+The `publish-pypi.yml` workflow follows ASE2SPRKKR's release process. Push a
+`v<version>` tag whose version exactly matches `[project].version` in
+`pyproject.toml`; its commit must be on `develop`. Before the first release,
+create and push the `develop` branch in the KKRunner repository. Keep
+`kkrunner.__version__` in sync with the package version.
+
+Configure a PyPI Trusted Publisher for project `kkrunner`, GitHub owner
+`ase2sprkkr`, repository `kkrunner`, workflow `publish-pypi.yml` and environment
+`pypi`. Protect the GitHub `pypi` environment with required reviewers and `v*`
+tag rules, as in ASE2SPRKKR. If hosted under another owner, use that owner in
+the publisher configuration. No PyPI API token is needed.
+
+The workflow verifies the tag and ancestry, builds one source archive and wheel,
+then tests that wheel on Python 3.9, 3.12 and 3.14 and builds/tests the documentation.
+Only after all checks pass does the publish job upload those exact artifacts
+using the `pypi` environment and GitHub's OIDC token.
+
+For the initial nonpublic alpha, keep `0.1.0.dev0` and do not push a version tag.
+Branch CI retains wheel/sdist artifacts for evaluation. Use access-controlled
+storage when sharing with testers: GitHub artifacts in a public repository are
+not private, and an upload to PyPI is public even for a development version.
+
+## Documentation
+
+Documentation is published at <https://ase2sprkkr.github.io/kkrunner/> after
+successful runtime and documentation checks on `develop`.
+
+The user guide and API reference use Sphinx with the Read the Docs theme, as in
+ASE2SPRKKR. Install the documentation extra and build the HTML and examples:
+
+```sh
+python -m pip install '.[docs]'
+make docs
+make docs-test
+```
+
+Open `build/docs/html/index.html`. See [the guide](docs/index.rst) for raw and
+persistent execution, manifests, projects, schedulers, remote execution and the
+CLI; [development](docs/development.rst) covers builds and releases. Generated
+API pages and HTML are not committed. CI validates documentation against the
+installed wheel, uploads the HTML artifact and deploys it to GitHub Pages on
+`develop`. Enable **Settings → Pages → Build and deployment → GitHub Actions**
+and allow `develop` in the `github-pages` environment deployment rules.

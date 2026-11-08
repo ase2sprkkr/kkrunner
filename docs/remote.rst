@@ -1,0 +1,93 @@
+Remote execution
+==================
+
+A remote executor separates a reusable target connection from each run's
+workspace mapping. Install the same KKRunner version on the target; scientific
+applications are needed there only when the command itself uses them.
+
+.. code-block:: python
+
+   from kkrunner import (
+       ExecutionSpec, LaunchSpec, RemoteEndpointExecutor, SshTransport,
+   )
+
+   executor = RemoteEndpointExecutor(SshTransport("user@cluster"))
+   spec = ExecutionSpec(
+       ["python3", "-c", "print(42)"],
+       directory="/absolute/local/work",
+       output_file="/absolute/local/work/stdout.txt",
+       launch=LaunchSpec(
+           local_root="/absolute/local/work",
+           remote_root="/absolute/remote/work",
+       ),
+   )
+   # Use an explicit RunManager or ProjectExecutionManager for reconnect.
+   run = manager.create_run(executor, spec)
+   run.run()
+
+The target directory is resolved before reservation. Uploads, output opening and
+submission start only after the full manifest footprint is reserved. All reads,
+writes and caches must be declared; undeclared executable side effects cannot
+be protected by KKRunner's reservations.
+
+For a nonstandard installation, pass an explicit protocol command:
+
+.. code-block:: python
+
+   executor = RemoteEndpointExecutor(
+       SshTransport("user@cluster"),
+       command=("/opt/kkrunner/bin/kkrunner-remote",),
+       filesystem_id="cluster-home",
+   )
+
+Use a consistent ``filesystem_id`` when aliases or shared mounts name the same
+target filesystem. It is independent of SSH flags and command selection.
+For a scheduler on that target, supply ``backend="slurm"`` (or another PSI/J
+backend) and install ``kkrunner[psij]`` on the target.
+
+Test the protocol without SSH
+-------------------------------
+
+``LocalTransport`` executes the same remote protocol using local subprocesses.
+It is useful for development and does not require a second machine:
+
+.. testcode::
+
+   import sys
+   import tempfile
+   from pathlib import Path
+   from kkrunner import (
+       ExecutionSpec, LaunchSpec, LocalTransport, RemoteEndpointExecutor,
+   )
+
+   workspace = tempfile.TemporaryDirectory()
+   directory = Path(workspace.name)
+   local, remote = directory / "local", directory / "remote"
+   local.mkdir()
+   remote.mkdir()
+   executor = RemoteEndpointExecutor(
+       LocalTransport(), command=(sys.executable, "-m", "kkrunner", "remote"),
+   )
+   outcome = executor.create_run(ExecutionSpec(
+       [sys.executable, "-c", "print(44)"],
+       directory=local,
+       output_file=local / "stdout.txt",
+       launch=LaunchSpec(local_root=local, remote_root=remote),
+   )).run()
+   print(outcome.return_code)
+   print((local / "stdout.txt").read_text().strip())
+
+.. testoutput::
+
+   0
+   44
+
+.. testcleanup::
+
+   workspace.cleanup()
+
+Transport operations are asynchronous and transfer exact files. Wildcards are
+expanded on the source side, preserving paths relative to the source root.
+Remote outcome receipts survive observation disconnects; durable run completion
+and acknowledgements remain the client's responsibility. See
+:doc:`persistent-runs` for download and processing recovery.

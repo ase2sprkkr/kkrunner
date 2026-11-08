@@ -1,3 +1,6 @@
+> Historical AI validation report. Results describe the revisions named below,
+> not the current release. This is not part of the official manual.
+
 # Extraction validation
 
 Source baselines: ASE2SPRKKR `b711659b794e911a2356fca8d53d7c5a27775891`,

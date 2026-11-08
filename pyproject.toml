@@ -15,10 +15,16 @@ dependencies = ["platformdirs"]
 [project.optional-dependencies]
 psij = ["psij-python>=0.9.11"]
 test = ["pytest"]
+docs = ["sphinx>=7", "sphinx-rtd-theme>=3", "myst-parser>=3"]
 
 [project.scripts]
 kkrunner = "kkrunner.cli:main"
 kkrunner-remote = "kkrunner.cli:remote_main"
+
+[project.urls]
+Documentation = "https://ase2sprkkr.github.io/kkrunner/"
+Source = "https://github.com/ase2sprkkr/kkrunner"
+Issues = "https://github.com/ase2sprkkr/kkrunner/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
