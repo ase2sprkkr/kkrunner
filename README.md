@@ -143,21 +143,23 @@ not private, and an upload to PyPI is public even for a development version.
 ## Documentation
 
 Documentation is published at <https://ase2sprkkr.github.io/kkrunner/> after
-successful runtime and documentation checks on `develop`.
+successful runtime and documentation checks on `master`.
 
 The user guide and API reference use Sphinx with the Read the Docs theme, as in
 ASE2SPRKKR. Install the documentation extra and build the HTML and examples:
 
 ```sh
-python -m pip install '.[docs]'
-make docs
-make docs-test
+python -m venv .venv
+.venv/bin/python -m pip install -e '.[docs]'
+make docs PYTHON=.venv/bin/python
+make docs-test PYTHON=.venv/bin/python
 ```
 
-Open `build/docs/html/index.html`. See [the guide](docs/index.rst) for raw and
+Use the same Python for dependency installation and Makefile targets; the
+`docs` extra includes MyST and the theme. Open `build/docs/html/index.html`. See [the guide](docs/index.rst) for raw and
 persistent execution, manifests, projects, schedulers, remote execution and the
 CLI; [development](docs/development.rst) covers builds and releases. Generated
 API pages and HTML are not committed. CI validates documentation against the
 installed wheel, uploads the HTML artifact and deploys it to GitHub Pages on
-`develop`. Enable **Settings → Pages → Build and deployment → GitHub Actions**
-and allow `develop` in the `github-pages` environment deployment rules.
+`master`. Enable **Settings → Pages → Build and deployment → GitHub Actions**
+and allow `master` in the `github-pages` environment deployment rules.

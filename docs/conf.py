@@ -22,7 +22,7 @@ html_context = {
     "display_github": True,
     "github_user": "ase2sprkkr",
     "github_repo": "kkrunner",
-    "github_version": "develop",
+    "github_version": "master",
     "conf_py_path": "/docs/",
 }
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}

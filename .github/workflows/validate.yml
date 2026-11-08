@@ -30,7 +30,8 @@ jobs:
 
   runtime:
     needs: build
-    runs-on: ubuntu-latest
+    # setup-python has no Python 3.9 build for Ubuntu 26.04 (ubuntu-latest).
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -89,6 +90,7 @@ jobs:
           subprocess.run([sys.executable, '-m', 'pip', 'install', f'{wheel}[docs]'], check=True)
           PY
           python -m pip check
+          python -c "import myst_parser, sphinx_rtd_theme"
       - name: Build HTML and execute examples from the source archive
         env:
           PYTHONPATH: ''
