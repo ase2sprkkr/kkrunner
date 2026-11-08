@@ -1,15 +1,17 @@
 import json
 from dataclasses import replace
+
 import pytest
+
 from kkrunner import (
     CorruptRunRecord,
+    Execution,
+    ExecutorEndpoint,
+    FileManifest,
     RunRecord,
     RunState,
     RunStore,
-    Execution,
     WorkingDirectory,
-    ExecutorEndpoint,
-    FileManifest,
 )
 
 
@@ -70,9 +72,10 @@ def test_current_schema_round_trips_with_one_execution_identity(tmp_path, backen
 
 def test_persisted_execution_identity_cannot_be_replaced(tmp_path):
     from dataclasses import replace
-    from kkrunner.manager import ExecutionManager
 
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    from kkrunner.runs.manager import RunManager
+
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = manager.new_record(directory=tmp_path, metadata={"test": {"task": "DOS"}}, processing_required=True)
     first = manager.transition(record, state=RunState.RUNNING, execution=record.execution.submitted("job-42"))
     assert manager.store.get(record.id).execution.backend_id == "job-42"

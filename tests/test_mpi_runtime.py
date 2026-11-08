@@ -1,8 +1,10 @@
 import json
 from dataclasses import asdict
+
 import pytest
-from kkrunner import mpi as mpi_runtime
-from kkrunner.base import LaunchSpec
+
+from kkrunner.backends import mpi as mpi_runtime
+from kkrunner.runs.base import LaunchSpec
 
 
 @pytest.mark.parametrize(

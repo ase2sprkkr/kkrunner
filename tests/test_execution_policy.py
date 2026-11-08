@@ -1,14 +1,17 @@
 import asyncio
-import os
 import sys
+
 import pytest
-from kkrunner.base import file_path, ExecutionSpec, FailurePhase, RunState, SubmissionNotStarted
-from kkrunner.endpoint import endpoint_for_executor
-from kkrunner.local import LocalExecutor, LocalRunner
-from kkrunner.manager import ArtifactAvailabilityState, ExecutionManager, ProjectRunner, RunStore
-from kkrunner.postprocessing import PostprocessingRunner
-from kkrunner.run_model import FileManifest, FileEntry
-from kkrunner.transport import LocalTransport
+
+from kkrunner.backends.endpoint import endpoint_for_executor
+from kkrunner.backends.local import LocalExecutor, LocalRunner
+from kkrunner.files.manifest import ArtifactAvailabilityState, FileEntry, FileManifest
+from kkrunner.files.paths import file_path
+from kkrunner.remote.transport import LocalTransport
+from kkrunner.runs.base import ExecutionSpec, FailurePhase, RunState, SubmissionNotStarted
+from kkrunner.runs.manager import PersistentRunner, RunManager
+from kkrunner.runs.processing import PostprocessingRunner
+from kkrunner.runs.records import RunStore
 
 
 def _local_spec(tmp_path, code="print('ok')"):
@@ -120,13 +123,13 @@ class _UncertainRunner(_NotStartedRunner):
 
 
 def _project_wrapper(tmp_path, runner):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     executor = LocalExecutor()
     endpoint = endpoint_for_executor(executor)
     record = manager.new_record(
         directory=tmp_path, endpoint=endpoint, metadata={"test": {"task": "SCF"}}, processing_required=True
     )
-    return (manager, ProjectRunner(manager, executor, runner, record))
+    return (manager, PersistentRunner(manager, executor, runner, record))
 
 
 def test_definite_pre_submit_failure_becomes_submission_failure(tmp_path):
@@ -150,7 +153,7 @@ def test_uncertain_submit_without_reference_stays_submitting(tmp_path):
 
 
 def test_artifact_availability_failure_does_not_change_finished_state(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = manager.new_record(
         directory=tmp_path,
         files=FileManifest(stdout=FileEntry(local_path=str(tmp_path / "out"))),
@@ -213,7 +216,7 @@ def test_file_path_flush_is_explicit(tmp_path):
 
 
 def test_file_path_strict_contract_preserves_optional_none(tmp_path):
-    from kkrunner.base import file_path
+    from kkrunner.files.paths import file_path
 
     assert file_path(None, tmp_path, required=True) is None
     assert file_path("case.out", tmp_path, required=True) == str(tmp_path / "case.out")
@@ -224,8 +227,8 @@ def test_file_path_strict_contract_preserves_optional_none(tmp_path):
 
 
 def test_strict_runner_path_errors_remain_backend_specific(tmp_path):
-    from kkrunner.psij import _path as psij_path
-    from kkrunner.remote import RemoteRunner
+    from kkrunner.backends.psij import _path as psij_path
+    from kkrunner.remote.runner import RemoteRunner
 
     spec = ExecutionSpec(argv=(), input_file=None, output_file=None, directory=str(tmp_path))
     runner = RemoteRunner(object(), spec)

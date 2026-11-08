@@ -1,9 +1,12 @@
 import base64
 import io
-import json
+
 import pytest
+
 from kkrunner import FailurePhase, RunState, RunStatus
-from kkrunner import psij, remote_process_worker, remote_service
+from kkrunner.backends import psij
+from kkrunner.remote import service as remote_service
+from kkrunner.remote import worker as remote_process_worker
 
 
 def _process_handle(tmp_path):
@@ -24,7 +27,7 @@ def _psij_handle(tmp_path):
 
 
 def _write_outcome(path, state, return_code, failure_phase=None):
-    from kkrunner import remote_mailbox
+    from kkrunner.remote import mailbox as remote_mailbox
 
     return remote_mailbox.publish_outcome("a" * 32, state, return_code, failure_phase)
 
@@ -424,13 +427,13 @@ def test_direct_follow_without_stream_files_is_live_only(tmp_path, monkeypatch):
 
 
 def test_ssh_psij_cleanup_removes_declared_outputs_before_submit(tmp_path, monkeypatch):
-    from kkrunner import remote_service
+    from kkrunner.remote import service as remote_service
 
     output = tmp_path / "previous.dat"
     kept = tmp_path / "cache.pot"
     output.write_bytes(b"stale")
     kept.write_bytes(b"restart")
-    from kkrunner.psij import PsijRunner
+    from kkrunner.backends.psij import PsijRunner
 
     class Runner(PsijRunner):
         def __init__(self, spec):
@@ -453,7 +456,7 @@ def test_ssh_psij_cleanup_removes_declared_outputs_before_submit(tmp_path, monke
         backend = "slurm"
         url = None
 
-        def create_project_run(self, spec, *, run_id):
+        def create_managed_run(self, spec, *, run_id):
             return Runner(spec)
 
     monkeypatch.setattr(remote_service, "_psij_executor", lambda options: Backend())
@@ -496,7 +499,7 @@ def test_scheduler_request_protects_remote_cache_wildcards(tmp_path):
 @pytest.mark.skipif(__import__("sys").platform != "linux", reason="PID identity needs Linux /proc")
 def test_failed_submission_ticket_cannot_leave_calculation_running(tmp_path, monkeypatch):
     """A ticket write failure happens while the worker is still blocked."""
-    from kkrunner.base import SubmissionNotStarted
+    from kkrunner.runs.base import SubmissionNotStarted
 
     marker = tmp_path / "must-not-run"
     request = {
@@ -524,7 +527,7 @@ def test_failed_submission_ticket_cannot_leave_calculation_running(tmp_path, mon
 
 
 def test_remote_cleanup_preserves_cache_matches_while_removing_stale_outputs(tmp_path):
-    from kkrunner.base import ExecutionSpec
+    from kkrunner.runs.base import ExecutionSpec
 
     work = tmp_path / "calculation"
     work.mkdir()
@@ -550,7 +553,7 @@ def test_remote_cleanup_preserves_cache_matches_while_removing_stale_outputs(tmp
 
 
 def test_remote_cleanup_checks_collisions_before_deleting_any_output(tmp_path):
-    from kkrunner.base import ExecutionSpec
+    from kkrunner.runs.base import ExecutionSpec
 
     work = tmp_path / "calculation"
     work.mkdir()
@@ -576,7 +579,8 @@ def test_remote_cleanup_checks_collisions_before_deleting_any_output(tmp_path):
 def test_supervisor_prelaunch_failure_publishes_durable_receipt_and_closes_fd(tmp_path, monkeypatch, failure):
     import asyncio
     import os
-    from kkrunner import remote_mailbox
+
+    from kkrunner.remote import mailbox as remote_mailbox
 
     monkeypatch.setenv("KKRunner_REMOTE_STATE_DIR", str(tmp_path / "state"))
     read_fd, write_fd = os.pipe()
@@ -638,7 +642,8 @@ def test_supervisor_stdin_close_failure_preserves_terminal_receipt(tmp_path, mon
     import asyncio
     import os
     import sys
-    from kkrunner import remote_mailbox
+
+    from kkrunner.remote import mailbox as remote_mailbox
 
     original_input = tmp_path / "input"
     original_input.write_bytes(b"input")
@@ -707,7 +712,8 @@ def test_supervisor_stdin_close_failure_preserves_terminal_receipt(tmp_path, mon
 def test_remote_submit_ipc_setup_failure_closes_every_fd(tmp_path, monkeypatch, failure_point):
     """No supervisor can have started; all owned prelaunch IPC must be released."""
     import os
-    from kkrunner.base import SubmissionNotStarted
+
+    from kkrunner.runs.base import SubmissionNotStarted
 
     directory = tmp_path / "socket-directory"
     created = []

@@ -1,13 +1,15 @@
 """Shared monitor waiting contract for local-project and remote runners."""
 
 import asyncio
+
 import pytest
-from kkrunner.base import ExecutionSpec, RunState
-from kkrunner.local_project import LocalProjectRunner
-from kkrunner.remote import RemoteRunner
+
+from kkrunner.backends.local_managed import ManagedLocalRunner
+from kkrunner.remote.runner import RemoteRunner
+from kkrunner.runs.base import ExecutionSpec, RunState
 
 
-@pytest.mark.parametrize("runner_class", (LocalProjectRunner, RemoteRunner))
+@pytest.mark.parametrize("runner_class", (ManagedLocalRunner, RemoteRunner))
 @pytest.mark.parametrize(
     "state, message",
     (
@@ -24,7 +26,7 @@ def test_wait_without_started_monitor_fails_immediately(tmp_path, runner_class, 
         runner.wait()
 
 
-@pytest.mark.parametrize("runner_class", (LocalProjectRunner, RemoteRunner))
+@pytest.mark.parametrize("runner_class", (ManagedLocalRunner, RemoteRunner))
 def test_wait_and_run_async_return_completed_monitor_result(tmp_path, runner_class):
     spec = ExecutionSpec(argv=(), input_file=None, output_file=None, directory=str(tmp_path))
     runner = runner_class(None, spec)

@@ -3,11 +3,13 @@
 import asyncio
 import os
 import select
-import subprocess
 import signal
+import subprocess
 import sys
+
 import pytest
-from kkrunner.local_process import stop_local_process
+
+from kkrunner.backends.local_process import stop_local_process
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Process-group signals require POSIX")

@@ -1,7 +1,9 @@
 import asyncio
+
 import pytest
+
 from kkrunner import Executor, LaunchSpec
-from kkrunner.remote_endpoint import RemoteEndpointExecutor
+from kkrunner.remote.executor import RemoteEndpointExecutor
 
 
 class _Transport:
@@ -33,10 +35,11 @@ def test_different_run_staging_policies_share_one_endpoint(tmp_path):
 
 def test_attach_restores_typed_manifest_without_sync_dictionary(tmp_path, monkeypatch):
     from kkrunner import RunState
-    from kkrunner.endpoint import endpoint_for_executor
-    from kkrunner.manager import RunRecord
-    from kkrunner.run_model import FileEntry, FileManifest, CacheEntry, Execution, WorkingDirectory
-    from kkrunner.transport import LocalTransport
+    from kkrunner.backends.endpoint import endpoint_for_executor
+    from kkrunner.files.manifest import CacheEntry, FileEntry, FileManifest
+    from kkrunner.remote.transport import LocalTransport
+    from kkrunner.runs.model import Execution, WorkingDirectory
+    from kkrunner.runs.records import RunRecord
 
     local = tmp_path / "local"
     remote = tmp_path / "remote"
@@ -135,12 +138,14 @@ def test_home_relative_remote_root_still_resolves_home_once(tmp_path, monkeypatc
 def test_attach_closes_stdout_if_opening_stderr_fails(tmp_path, monkeypatch):
     """A failed second open must release the first stream immediately."""
     import builtins
+
     from kkrunner import RunState
-    from kkrunner.endpoint import endpoint_for_executor
-    from kkrunner.manager import RunRecord
-    from kkrunner.run_model import Execution, FileEntry, FileManifest, WorkingDirectory
-    from kkrunner.transport import LocalTransport
-    from kkrunner import remote_endpoint
+    from kkrunner.backends.endpoint import endpoint_for_executor
+    from kkrunner.files.manifest import FileEntry, FileManifest
+    from kkrunner.remote import executor as remote_endpoint
+    from kkrunner.remote.transport import LocalTransport
+    from kkrunner.runs.model import Execution, WorkingDirectory
+    from kkrunner.runs.records import RunRecord
 
     local, remote = (tmp_path / "local", tmp_path / "remote")
     local.mkdir()

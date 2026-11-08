@@ -3,8 +3,10 @@
 import asyncio
 import os
 from threading import Event
+
 import pytest
-from kkrunner.growing_file_tail import GrowingFileTail, follow_growing_files, follow_job_files
+
+from kkrunner.support.growing_file_tail import GrowingFileTail, follow_growing_files, follow_job_files
 
 
 def test_append_and_eof(tmp_path):

@@ -1,9 +1,10 @@
-from types import SimpleNamespace
-from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
+
 import pytest
+
 from kkrunner import DuplicateSubmissionError, Executor, FileEntry, FileManifest, RunState, RunStore
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 
 class _Runner:
@@ -66,8 +67,8 @@ def _run(manager, executor, directory, *, task="DOS", dataset="case"):
 def test_duplicate_task_and_dataset_is_rejected_across_managers(tmp_path):
     directory = tmp_path / "work"
     store_path = tmp_path / "runs"
-    first_manager = ExecutionManager(RunStore(store_path))
-    second_manager = ExecutionManager(RunStore(store_path))
+    first_manager = RunManager(RunStore(store_path))
+    second_manager = RunManager(RunStore(store_path))
     first = _run(first_manager, _Executor(), directory)
     second = _run(second_manager, _Executor(), directory)
     first.submit()
@@ -78,7 +79,7 @@ def test_duplicate_task_and_dataset_is_rejected_across_managers(tmp_path):
 
 
 def test_different_dataset_can_share_non_scf_directory(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     executor = _Executor()
     first = _run(manager, executor, tmp_path, dataset="one")
     second = _run(manager, executor, tmp_path, dataset="two")
@@ -89,7 +90,7 @@ def test_different_dataset_can_share_non_scf_directory(tmp_path):
 
 
 def test_task_names_do_not_create_conflicts_with_disjoint_manifests(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     executor = _Executor()
     scf = _run(manager, executor, tmp_path, task="SCF", dataset="scf")
     dos = _run(manager, executor, tmp_path, task="DOS", dataset="dos")
@@ -99,7 +100,7 @@ def test_task_names_do_not_create_conflicts_with_disjoint_manifests(tmp_path):
 
 
 def test_final_run_releases_submission_namespace(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     executor = _Executor()
     first = _run(manager, executor, tmp_path)
     first.submit()
@@ -114,7 +115,7 @@ def test_final_run_releases_submission_namespace(tmp_path):
 
 def test_submitting_record_contains_submission_key_before_backend_submit(tmp_path):
     store = RunStore(tmp_path / "runs")
-    manager = ExecutionManager(store)
+    manager = RunManager(store)
     executor = _Executor()
     run = _run(manager, executor, tmp_path)
     backend = executor.runners[0]
@@ -136,7 +137,7 @@ def test_submitting_record_contains_submission_key_before_backend_submit(tmp_pat
 
 @pytest.mark.parametrize("overlap", (True, False), ids=("same-file", "separate-files"))
 def test_declared_exact_outputs_conflict_only_if_they_share_a_target(tmp_path, overlap):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     first_path = str(tmp_path / "one.out")
     second_path = first_path if overlap else str(tmp_path / "two.out")
     first = manager.new_record(
@@ -172,7 +173,7 @@ def test_declared_exact_outputs_conflict_only_if_they_share_a_target(tmp_path, o
 def test_declared_read_write_conflicts_respect_access_and_absolute_paths(
     tmp_path, first_access, same_directory, conflict
 ):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     shared = tmp_path / ("shared.pot" if same_directory or first_access == "input" else "shared.out")
     if same_directory:
         shared.write_text("density")
@@ -215,7 +216,7 @@ def test_declared_read_write_conflicts_respect_access_and_absolute_paths(
 def test_wildcard_output_collisions_follow_pattern_overlap(
     tmp_path, first_pattern, second_pattern, second_is_stdout, conflict
 ):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     first = manager.new_record(
         directory=tmp_path,
         files=FileManifest(outputs=(FileEntry(local_path=str(tmp_path / first_pattern)),)),
@@ -240,7 +241,7 @@ def test_wildcard_output_collisions_follow_pattern_overlap(
 def test_remote_conflicts_use_declared_target_paths_before_staging(tmp_path):
     from kkrunner import ExecutorEndpoint
 
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     endpoint = ExecutorEndpoint(executor="ssh", host="cluster")
     first = manager.new_record(
         directory=tmp_path / "one",

@@ -1,7 +1,7 @@
 """Contracts shared by local project and PSI/J artifact discovery."""
 
-from kkrunner.file_availability import discover_local_files
-from kkrunner.run_model import CacheEntry, FileEntry, FileManifest
+from kkrunner.files.availability import discover_local_files
+from kkrunner.files.manifest import CacheEntry, FileEntry, FileManifest
 
 
 def test_discovers_outputs_and_caches_with_independent_pattern_children(tmp_path):
@@ -42,7 +42,7 @@ def test_local_supervisor_discovery_does_not_override_stream_publication(tmp_pat
 
 
 def test_clear_outputs_preserves_inputs_and_cache(tmp_path):
-    from kkrunner.file_availability import clear_declared_outputs
+    from kkrunner.files.availability import clear_declared_outputs
 
     input_file = tmp_path / "input.dat"
     cache_file = tmp_path / "cache.dat"
@@ -58,7 +58,7 @@ def test_clear_outputs_preserves_inputs_and_cache(tmp_path):
 
 
 def test_clear_outputs_preserves_wildcard_cache_matches(tmp_path):
-    from kkrunner.file_availability import clear_declared_outputs
+    from kkrunner.files.availability import clear_declared_outputs
 
     cache = tmp_path / "restart-1.pot"
     output = tmp_path / "result-1.pot"
@@ -70,7 +70,7 @@ def test_clear_outputs_preserves_wildcard_cache_matches(tmp_path):
 
 
 def test_local_wildcard_discovery_uses_same_glob_semantics_as_transport(tmp_path):
-    from kkrunner.transport import expand_local_candidates
+    from kkrunner.files.paths import expand_local_candidates
 
     hidden = tmp_path / ".hidden"
     hidden.mkdir()
@@ -86,7 +86,7 @@ def test_local_wildcard_discovery_uses_same_glob_semantics_as_transport(tmp_path
 
 
 def test_cleanup_unlinks_symlink_without_deleting_its_target(tmp_path):
-    from kkrunner.file_availability import clear_declared_outputs
+    from kkrunner.files.availability import clear_declared_outputs
 
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -103,7 +103,8 @@ def test_cleanup_unlinks_symlink_without_deleting_its_target(tmp_path):
 
 def test_protected_output_stream_matches_cache_glob(tmp_path):
     import pytest
-    from kkrunner.file_availability import validate_output_collisions
+
+    from kkrunner.files.availability import validate_output_collisions
 
     protected = tmp_path / "restart-1.pot"
     protected.write_text("density")
@@ -113,7 +114,8 @@ def test_protected_output_stream_matches_cache_glob(tmp_path):
 
 def test_explicit_output_collision_preserves_protected_file(tmp_path):
     import pytest
-    from kkrunner.file_availability import validate_output_collisions
+
+    from kkrunner.files.availability import validate_output_collisions
 
     input_path = tmp_path / "input.dat"
     input_path.write_bytes(b"input")
@@ -123,7 +125,7 @@ def test_explicit_output_collision_preserves_protected_file(tmp_path):
 
 
 def test_output_pattern_can_skip_protected_files(tmp_path):
-    from kkrunner.file_availability import validate_output_collisions, clear_declared_outputs
+    from kkrunner.files.availability import clear_declared_outputs, validate_output_collisions
 
     keep = tmp_path / "restart.pot"
     drop = tmp_path / "old.pot"
@@ -137,7 +139,8 @@ def test_output_pattern_can_skip_protected_files(tmp_path):
 
 def test_protected_output_rejects_symlink_alias(tmp_path):
     import pytest
-    from kkrunner.file_availability import validate_output_collisions
+
+    from kkrunner.files.availability import validate_output_collisions
 
     source = tmp_path / "source.dat"
     source.write_bytes(b"density")
@@ -150,8 +153,10 @@ def test_protected_output_rejects_symlink_alias(tmp_path):
 
 def test_protected_output_rejects_hardlink_alias(tmp_path):
     import os
+
     import pytest
-    from kkrunner.file_availability import validate_output_collisions
+
+    from kkrunner.files.availability import validate_output_collisions
 
     source = tmp_path / "source.dat"
     source.write_bytes(b"density")
@@ -164,8 +169,10 @@ def test_protected_output_rejects_hardlink_alias(tmp_path):
 
 def test_collision_expands_protected_wildcard_once_for_multiple_outputs(tmp_path, monkeypatch):
     import os
+
     import pytest
-    from kkrunner import file_availability
+
+    from kkrunner.files import availability as file_availability
 
     protected_file = tmp_path / "restart-1.pot"
     protected_file.write_bytes(b"restart")

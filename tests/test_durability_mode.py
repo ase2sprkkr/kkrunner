@@ -1,7 +1,9 @@
 import os
 import stat
+
 import pytest
-import kkrunner._durability as durability
+
+import kkrunner.support.durability as durability
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX creation-mode semantics are required by this test")
 

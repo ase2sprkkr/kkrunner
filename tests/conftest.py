@@ -1,7 +1,8 @@
 """Keep process-local executor pools isolated between tests."""
 
 import pytest
-from kkrunner import pool
+
+from kkrunner.backends import pool
 
 
 @pytest.fixture(autouse=True)
@@ -17,9 +18,9 @@ def isolated_default_executor_pool():
 
 @pytest.fixture(scope="session")
 def docker_execution_image():
-    from pathlib import Path
     import shutil
     import subprocess
+    from pathlib import Path
     from types import SimpleNamespace
 
     docker = shutil.which("docker")

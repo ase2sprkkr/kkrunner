@@ -1,6 +1,6 @@
 """Text observers decode UTF-8 across arbitrary byte boundaries."""
 
-from kkrunner.base import OutputObservers
+from kkrunner.runs.base import OutputObservers
 
 
 def test_utf8_chunks_and_independent_channels():

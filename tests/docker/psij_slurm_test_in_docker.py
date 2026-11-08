@@ -1,17 +1,17 @@
 """Scheduler workload intentionally using no scientific application package."""
 
-from pathlib import Path
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from kkrunner import ExecutionSpec, PsijExecutor, RunState, RunStore
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 
 def main():
     with TemporaryDirectory(prefix="kkrunner-slurm-") as work:
         directory = Path(work)
-        manager = ExecutionManager(RunStore(directory / "runs"))
+        manager = RunManager(RunStore(directory / "runs"))
         run = manager.create_run(
             PsijExecutor("slurm"),
             ExecutionSpec(

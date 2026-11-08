@@ -1,8 +1,11 @@
 import asyncio
+
 import pytest
-from kkrunner.base import SubmissionNotStarted
-from kkrunner.remote import FileSyncPolicy
-from kkrunner.transport import LocalTransport
+
+from kkrunner.files.manifest import FileSyncPolicy
+from kkrunner.remote.transport import LocalTransport
+from kkrunner.runs.base import SubmissionNotStarted
+
 from .test_remote import _processed_run, _text_run
 
 
@@ -243,6 +246,7 @@ def test_missing_optional_scf_startup_pattern_is_not_fatal(tmp_path):
 def test_overlapping_optional_and_required_wildcards_sync_each_file_once(tmp_path, optional_first):
     """Distinct wildcard requirements must share one concrete-transfer set."""
     from kkrunner import TaskFile
+
     from .test_remote import _SpyTransport
 
     transport = _SpyTransport()

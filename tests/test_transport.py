@@ -2,13 +2,15 @@
 
 import asyncio
 import hashlib
-import pytest
 import os
 import signal
 import subprocess
 import sys
-from kkrunner.transport import LocalTransport, SshTransport
-from kkrunner.file_versions import FileVersion, file_digest
+
+import pytest
+
+from kkrunner.files.versions import FileVersion, file_digest
+from kkrunner.remote.transport import LocalTransport, SshTransport
 
 
 def test_local_transport_run_start_and_files(tmp_path):
@@ -109,7 +111,7 @@ def test_transport_missing_file_is_optional_but_provenance_digest_is_strict(tmp_
 
 def test_ssh_and_local_globstar_agree_on_hidden_entries(tmp_path):
     """Remote glob semantics match the local transport, including dotfiles."""
-    from kkrunner.transport import _match_relative_path, expand_local_files
+    from kkrunner.remote.transport import _match_relative_path, expand_local_files
 
     for name in (
         "shown/one.dat",
@@ -131,7 +133,9 @@ def test_ssh_and_local_globstar_agree_on_hidden_entries(tmp_path):
 
 def test_strict_transfer_refuses_wildcard_symlink_outside_source_root(tmp_path):
     import pytest
-    from kkrunner.transport import expand_local_candidates, expand_local_files
+
+    from kkrunner.files.paths import expand_local_candidates
+    from kkrunner.remote.transport import expand_local_files
 
     root = tmp_path / "root"
     root.mkdir()
@@ -414,8 +418,8 @@ def test_ssh_batch_tar_uses_explicit_compression_without_probing(tmp_path, zstd)
 
 
 def test_ssh_endpoint_compression_roundtrips_from_transport():
-    from kkrunner.endpoint import endpoint_for_executor, create_executor_from_endpoint
-    from kkrunner.remote_endpoint import RemoteEndpointExecutor
+    from kkrunner.backends.endpoint import create_executor_from_endpoint, endpoint_for_executor
+    from kkrunner.remote.executor import RemoteEndpointExecutor
 
     for compressed in (False, True):
         endpoint = endpoint_for_executor(RemoteEndpointExecutor(SshTransport("cluster", zstd=compressed)))
@@ -490,7 +494,7 @@ def test_ssh_upload_preserves_original_error_when_remote_cleanup_fails(tmp_path)
 
 
 def test_ssh_download_preserves_original_error_when_temp_unlink_fails(tmp_path, monkeypatch):
-    from kkrunner import transport as module
+    from kkrunner.remote import transport as module
 
     transport = SshTransport("unused", ssh="/missing-kkrunner-ssh-executable")
 

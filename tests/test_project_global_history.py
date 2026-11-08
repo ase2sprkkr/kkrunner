@@ -1,12 +1,15 @@
 """Global run history and cross-project namespace regression tests."""
 
 from dataclasses import replace
+
 import pytest
-from kkrunner.base import RunState
-from kkrunner import FileManifest, FileEntry
-from kkrunner.manager import DuplicateSubmissionError, RunStore
-from kkrunner.project_manager import ExecutionManager
-from kkrunner.projects import ProjectRepository, ProjectDeleteError
+
+from kkrunner import FileEntry, FileManifest
+from kkrunner.projects.manager import ProjectExecutionManager
+from kkrunner.projects.repository import ProjectDeleteError, ProjectRepository
+from kkrunner.runs.base import RunState
+from kkrunner.runs.manager import DuplicateSubmissionError
+from kkrunner.runs.records import RunStore
 
 
 def test_different_projects_share_one_store_and_keep_project_identity(tmp_path):
@@ -14,8 +17,8 @@ def test_different_projects_share_one_store_and_keep_project_identity(tmp_path):
     root = projects.create("Root")
     first = projects.create("First", parent_id=root.id)
     second = projects.create("Second", parent_id=root.id)
-    a = ExecutionManager(project_repository=projects, project=first)
-    b = ExecutionManager(project_repository=projects, project=second)
+    a = ProjectExecutionManager(project_repository=projects, project=first)
+    b = ProjectExecutionManager(project_repository=projects, project=second)
     assert a.store.directory == b.store.directory
     first_run = a.new_record(
         directory=tmp_path / "work", metadata={"test": {"task": "DOS", "dataset": "same"}}, processing_required=True
@@ -35,8 +38,8 @@ def test_cross_project_active_conflict_and_project_deletion(tmp_path):
     root = projects.create("Root")
     first = projects.create("First", parent_id=root.id)
     second = projects.create("Second", parent_id=root.id)
-    a = ExecutionManager(project_repository=projects, project=first)
-    b = ExecutionManager(project_repository=projects, project=second)
+    a = ProjectExecutionManager(project_repository=projects, project=first)
+    b = ProjectExecutionManager(project_repository=projects, project=second)
     first_record = a.new_record(
         directory=tmp_path / "work",
         files=FileManifest(stdout=FileEntry(local_path=str(tmp_path / "shared.out"))),
@@ -63,7 +66,7 @@ def test_for_project_preserves_explicit_run_store(tmp_path):
     projects = ProjectRepository(tmp_path / "projects")
     project = projects.create("Project")
     custom_store = RunStore(tmp_path / "custom-runs")
-    original = ExecutionManager(store=custom_store, project_repository=projects, submitting_grace=17)
+    original = ProjectExecutionManager(store=custom_store, project_repository=projects, submitting_grace=17)
     bound = original.for_project(project)
     assert bound.store is custom_store
     assert bound.submitting_grace == 17
@@ -79,7 +82,7 @@ def test_for_project_preserves_explicit_run_store(tmp_path):
 def test_for_project_without_explicit_store_uses_shared_project_store(tmp_path):
     projects = ProjectRepository(tmp_path / "projects")
     project = projects.create("Project")
-    unbound = ExecutionManager(project_repository=projects)
+    unbound = ProjectExecutionManager(project_repository=projects)
     bound = unbound.for_project(project)
     assert bound.store is unbound.store
     assert bound.project_id == project.id
@@ -91,7 +94,7 @@ def test_unknown_run_prevents_project_deletion_until_terminal(tmp_path):
     projects = ProjectRepository(tmp_path / "projects")
     root = projects.create("Root")
     project = projects.create("Child", parent_id=root.id)
-    manager = ExecutionManager(project_repository=projects, project=project)
+    manager = ProjectExecutionManager(project_repository=projects, project=project)
     record = replace(
         manager.new_record(directory=tmp_path / "work", metadata={"test": {"task": "DOS"}}, processing_required=True),
         state=RunState.UNKNOWN,

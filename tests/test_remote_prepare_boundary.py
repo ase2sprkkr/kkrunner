@@ -1,24 +1,25 @@
 """Crash boundary: remote staging metadata must be persisted before submit."""
 
 import pytest
-from kkrunner.remote_endpoint import _RemoteRun
+
 from kkrunner import (
     ExecutionSpec,
     FileEntry,
     FileManifest,
     FileMapping,
     LaunchSpec,
+    LocalTransport,
     RemoteEndpointExecutor,
     RunState,
     RunStore,
-    LocalTransport,
 )
-from kkrunner.manager import ExecutionManager
+from kkrunner.remote.executor import _RemoteRun
+from kkrunner.runs.manager import RunManager
 
 
 def test_prepared_manifest_is_durable_before_remote_backend_submit(tmp_path, monkeypatch):
     executor = RemoteEndpointExecutor(LocalTransport())
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     directory = tmp_path / "local"
     directory.mkdir()
     output = directory / "run.out"
@@ -48,7 +49,7 @@ def test_prepared_manifest_is_durable_before_remote_backend_submit(tmp_path, mon
         return {"state": "running", "remote_id": "opaque-job"}
 
     monkeypatch.setattr(_RemoteRun, "_prepare_async", prepare)
-    monkeypatch.setattr("kkrunner.remote_endpoint.start_monitor", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kkrunner.remote.executor.start_monitor", lambda *args, **kwargs: None)
     executor._submit = submit
 
     async def status(_directory, _backend_id, _files=None):
@@ -68,7 +69,8 @@ def test_prepared_manifest_is_durable_before_remote_backend_submit(tmp_path, mon
 
 def test_remote_manifest_uses_same_declarations_as_local(tmp_path):
     import asyncio
-    from kkrunner.run_model import FileManifest
+
+    from kkrunner.files.manifest import FileManifest
 
     directory = tmp_path / "local"
     directory.mkdir(exist_ok=True)
@@ -150,8 +152,8 @@ def test_remote_file_preparation_uses_validated_manifest(tmp_path):
 
 @pytest.mark.parametrize("method", ("submit", "start"))
 def test_postprocessing_rejected_submit_preserves_error_and_does_not_monitor(method):
-    from kkrunner.base import SubmissionNotStarted
-    from kkrunner.postprocessing import PostprocessingRunner
+    from kkrunner.runs.base import SubmissionNotStarted
+    from kkrunner.runs.processing import PostprocessingRunner
 
     failure = SubmissionNotStarted("preflight refused")
 
@@ -172,8 +174,8 @@ def test_postprocessing_rejected_submit_preserves_error_and_does_not_monitor(met
 @pytest.mark.parametrize("conflict", ["mixed_input_optionality", "duplicate_output", "duplicate_cache"])
 def test_invalid_manifest_rejected_before_remote_side_effects(tmp_path, conflict):
     """Preflight must not create target directories or upload any inputs."""
-    from kkrunner.base import SubmissionNotStarted
     from kkrunner import TaskFile
+    from kkrunner.runs.base import SubmissionNotStarted
 
     class NoSideEffectTransport(LocalTransport):
         async def run(self, *args, **kwargs):

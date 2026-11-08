@@ -1,4 +1,4 @@
-from kkrunner.file_locks import FileLock
+from kkrunner.support.file_locks import FileLock
 
 
 def test_nonblocking_file_lock_ownership_and_context_release(tmp_path):

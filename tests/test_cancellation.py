@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import asyncio
 from threading import Event, Thread
+
 import pytest
-from kkrunner.base import ExecutionResources, ResourceOwnedRunner, RunState
+
+from kkrunner.runs.base import ExecutionResources, ResourceOwnedRunner, RunState
 
 
 class _Resource:

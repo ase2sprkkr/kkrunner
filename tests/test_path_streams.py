@@ -1,6 +1,5 @@
 """Path-valued specs work without application-owned pre-opened handles."""
 
-from pathlib import Path
 import sys
 
 from kkrunner import ExecutionSpec, LaunchSpec, LocalExecutor, LocalTransport, RemoteEndpointExecutor

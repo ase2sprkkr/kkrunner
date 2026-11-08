@@ -1,8 +1,10 @@
 """Project membership is the run-store namespace, not a reference list."""
 
 from types import SimpleNamespace
+
 import pytest
-from kkrunner import ExecutionManager, Executor, ProjectRepository, RunState
+
+from kkrunner import Executor, ProjectExecutionManager, ProjectRepository, RunState
 
 
 class _Runner:
@@ -39,19 +41,19 @@ class _Runner:
 class _Executor(Executor):
     name = "project-test"
 
-    def create_project_run(self, spec, *, run_id, callback=None):
+    def create_managed_run(self, spec, *, run_id, callback=None):
         self.run_id = run_id
         self.runner = _Runner()
         return self.runner
 
     def create_run(self, spec, callback=None):
-        raise AssertionError("project run must use create_project_run")
+        raise AssertionError("managed run must use create_managed_run")
 
 
 def _fixture(tmp_path):
     projects = ProjectRepository(tmp_path / "projects")
     project = projects.create("Project")
-    manager = ExecutionManager(project_repository=projects).for_project(project)
+    manager = ProjectExecutionManager(project_repository=projects).for_project(project)
     return (manager, projects, project)
 
 
@@ -79,7 +81,7 @@ def test_run_is_durable_in_project_namespace_before_backend_submit(tmp_path):
 @pytest.mark.parametrize("explicit", (False, True), ids=("missing", "invalid"))
 def test_project_must_exist_before_backend_is_created(tmp_path, explicit):
     projects = ProjectRepository(tmp_path / "projects")
-    manager = ExecutionManager(project_repository=projects)
+    manager = ProjectExecutionManager(project_repository=projects)
     executor = _Executor()
     options = {"project": "missing"} if explicit else {}
     errors = (KeyError, ValueError) if explicit else ValueError

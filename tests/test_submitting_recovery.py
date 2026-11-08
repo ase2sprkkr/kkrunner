@@ -1,8 +1,10 @@
 from threading import Event
 from types import SimpleNamespace
+
 import pytest
+
 from kkrunner import DuplicateSubmissionError, Executor, ExecutorPool, RunState, RunStatus, RunStore
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 
 class _Runner:
@@ -41,7 +43,7 @@ class _RecoveringExecutor(Executor):
         self.recovered = recovered
         self.recovery_calls = []
 
-    def create_project_run(self, spec, *, run_id, callback=None):
+    def create_managed_run(self, spec, *, run_id, callback=None):
         return _Runner()
 
     def recover_submission(self, run_id, submission, *, submitted_at=None):
@@ -62,7 +64,7 @@ def _run(manager, executor, tmp_path):
 
 def test_confirmed_absent_stale_submission_releases_namespace(tmp_path):
     executor = _RecoveringExecutor(None)
-    manager = ExecutionManager(RunStore(tmp_path / "runs"), executor_pool=ExecutorPool(), submitting_grace=0)
+    manager = RunManager(RunStore(tmp_path / "runs"), executor_pool=ExecutorPool(), submitting_grace=0)
     abandoned = _run(manager, executor, tmp_path)
     manager.reserve(abandoned.record)
     replacement = _run(manager, executor, tmp_path)
@@ -94,7 +96,7 @@ def test_unresolved_or_recovered_submission_keeps_duplicate_protection(
     tmp_path, recovered, grace, expected_state, expected_backend, recovery_calls
 ):
     executor = _RecoveringExecutor(recovered)
-    manager = ExecutionManager(RunStore(tmp_path / "runs"), executor_pool=ExecutorPool(), submitting_grace=grace)
+    manager = RunManager(RunStore(tmp_path / "runs"), executor_pool=ExecutorPool(), submitting_grace=grace)
     uncertain = _run(manager, executor, tmp_path)
     manager.reserve(uncertain.record)
     replacement = _run(manager, executor, tmp_path)

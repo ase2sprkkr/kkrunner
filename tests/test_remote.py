@@ -2,12 +2,14 @@ import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from kkrunner.base import ExecutionSpec, FailurePhase, LaunchSpec, RunState, SubmissionNotStarted
-from kkrunner.postprocessing import PostprocessingRunner
-from kkrunner.remote import FileSyncPolicy
-from kkrunner.remote_endpoint import RemoteEndpointExecutor
-from kkrunner.transport import LocalTransport
+
+from kkrunner.files.manifest import FileSyncPolicy
+from kkrunner.remote.executor import RemoteEndpointExecutor
+from kkrunner.remote.transport import LocalTransport
+from kkrunner.runs.base import ExecutionSpec, FailurePhase, LaunchSpec, RunState, SubmissionNotStarted
+from kkrunner.runs.processing import PostprocessingRunner
 
 
 class _SpyTransport(LocalTransport):
@@ -127,7 +129,7 @@ def test_remote_input_file_and_stdin_staged_only_once(tmp_path):
 
     async def prepare():
         directory = await runner.executor.map_directory(spec.directory)
-        from kkrunner.run_model import FileManifest
+        from kkrunner.files.manifest import FileManifest
 
         return await runner._prepare_request("one-run", directory, FileManifest.from_spec(spec))
 
@@ -456,7 +458,7 @@ def test_file_sync_transfer_decision_is_direction_independent(policy, source, de
 
 def test_remote_argv_reuses_staged_path_identity(tmp_path):
     """Relative, absolute and Path arguments share the staging resolver."""
-    from kkrunner.remote import RemoteRunner
+    from kkrunner.remote.runner import RemoteRunner
 
     work = tmp_path / "work"
     source = work / "input.dat"

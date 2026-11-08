@@ -1,7 +1,8 @@
 """Terminal lifecycle semantics are consistent for all execution backends."""
 
 import pytest
-from kkrunner.base import RunState
+
+from kkrunner.runs.base import RunState
 
 
 @pytest.mark.parametrize("state", tuple(RunState))

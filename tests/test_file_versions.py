@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from kkrunner.file_versions import FileState, FileVersion
+from kkrunner.files.versions import FileState, FileVersion
 
 
 def test_version_tracks_content_through_metadata_replacement_rewrite_and_removal(

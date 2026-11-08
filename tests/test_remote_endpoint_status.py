@@ -1,17 +1,18 @@
 from dataclasses import replace
+
 import pytest
+
 from kkrunner import (
     Execution,
-    ExecutorEndpoint,
+    FailurePhase,
     FileEntry,
     FileManifest,
     RunRecord,
-    FailurePhase,
     RunState,
     WorkingDirectory,
 )
-from kkrunner.endpoint import endpoint_for_executor
-from kkrunner.remote_endpoint import RemoteEndpointExecutor
+from kkrunner.backends.endpoint import endpoint_for_executor
+from kkrunner.remote.executor import RemoteEndpointExecutor
 
 
 class _Transport:
@@ -188,8 +189,8 @@ def test_remote_status_and_recovery_share_backend_facts_mapping(facts, expected_
 )
 def test_remote_runner_backend_facts_are_consistent(tmp_path, facts, expected_phase):
     """Backend metadata is applied to both the runner and its result."""
-    from kkrunner.base import ExecutionSpec
-    from kkrunner.remote import RemoteRunner
+    from kkrunner.remote.runner import RemoteRunner
+    from kkrunner.runs.base import ExecutionSpec
 
     runner = RemoteRunner(None, ExecutionSpec(argv=(), input_file=None, output_file=None, directory=str(tmp_path)))
     runner._apply_backend_facts(facts)

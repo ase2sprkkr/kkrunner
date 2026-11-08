@@ -6,12 +6,12 @@ from threading import Event, Thread
 import pytest
 
 from kkrunner import CorruptRunRecord, ExecutionResources, ResourceOwnedRunner, RunState, RunStore
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 
 @pytest.mark.parametrize("data", [[], None, 42])
 def test_non_object_json_root_raises_corrupt_record(tmp_path, data):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = manager.new_record(directory=tmp_path)
     manager.store.save(record)
     path = manager.store._path(record)

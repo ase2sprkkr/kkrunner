@@ -1,5 +1,6 @@
 import asyncio
-from kkrunner import ExecutionSpec, LaunchSpec, LocalTransport, MpiSpec, RemoteExecutor, FileManifest
+
+from kkrunner import ExecutionSpec, FileManifest, LaunchSpec, LocalTransport, MpiSpec, RemoteEndpointExecutor
 
 
 def test_remote_request_carries_target_executor_options(tmp_path):
@@ -12,7 +13,9 @@ def test_remote_request_carries_target_executor_options(tmp_path):
     potential = directory / "start.pot"
     potential.write_text("potential")
     output_file = (directory / "run.out").open("wb")
-    executor = RemoteExecutor(LocalTransport(), backend="psij", backend_options={"backend": "slurm", "url": None})
+    executor = RemoteEndpointExecutor(
+        LocalTransport(), backend="psij", backend_options={"backend": "slurm", "url": None}
+    )
     launch = LaunchSpec(
         mpi=MpiSpec(required=True, autodetect=True, process_count=16),
         local_root=local_root,
@@ -62,7 +65,7 @@ def test_nonproject_remote_request_does_not_publish_project_identity(tmp_path):
     root = tmp_path / "local"
     directory = root / "work"
     directory.mkdir(parents=True)
-    executor = RemoteExecutor(LocalTransport(), backend="psij")
+    executor = RemoteEndpointExecutor(LocalTransport(), backend="psij")
     runner = executor.create_run(
         ExecutionSpec(
             argv=("program",),
@@ -77,7 +80,7 @@ def test_nonproject_remote_request_does_not_publish_project_identity(tmp_path):
 
 
 def test_remote_sync_declarations_have_one_wire_authority(tmp_path):
-    from kkrunner.remote_service import _request_spec
+    from kkrunner.remote.service import _request_spec
 
     root = tmp_path / "local"
     directory = root / "work"
@@ -86,7 +89,7 @@ def test_remote_sync_declarations_have_one_wire_authority(tmp_path):
     auxiliary = directory / "plot-*.dat"
     cache = directory / "restart.dat"
     cache.write_text("restart")
-    executor = RemoteExecutor(LocalTransport())
+    executor = RemoteEndpointExecutor(LocalTransport())
     spec = ExecutionSpec(
         argv=("program",),
         directory=str(directory),

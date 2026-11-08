@@ -2,12 +2,14 @@
 
 import asyncio
 from types import SimpleNamespace
+
 import pytest
-from kkrunner.base import ExecutionSpec, FailurePhase, RunState
-from kkrunner.remote import RemoteRunner
-from kkrunner.remote_endpoint import _RemoteRun
-from kkrunner.run_model import FileEntry, FileManifest
-from kkrunner.transport import LocalTransport
+
+from kkrunner.files.manifest import FileEntry, FileManifest
+from kkrunner.remote.executor import _RemoteRun
+from kkrunner.remote.runner import RemoteRunner
+from kkrunner.remote.transport import LocalTransport
+from kkrunner.runs.base import ExecutionSpec, FailurePhase, RunState
 
 
 async def _completed(self):

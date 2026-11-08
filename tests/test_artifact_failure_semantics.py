@@ -1,12 +1,13 @@
 """Execution outcome and file availability are independent persisted facts."""
 
 import pytest
+
 from kkrunner import ArtifactAvailabilityState, FailurePhase, FileEntry, FileManifest, RunState, RunStore
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 
 def _record(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = manager.new_record(
         remote_directory="/remote",
         directory=tmp_path,
@@ -149,7 +150,7 @@ def test_retry_failed_download_preserves_backend_then_captures_clean_snapshot(tm
 
 
 def test_resume_download_retains_previously_available_artifacts(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     output = tmp_path / "stdout"
     other = tmp_path / "other"
     record = manager.new_record(

@@ -1,11 +1,10 @@
 """Behavioral contracts introduced by the extraction, without application imports."""
 
-from dataclasses import replace
 import json
-import os
-from pathlib import Path
 import subprocess
 import sys
+from dataclasses import replace
+from pathlib import Path
 from threading import Event, Thread
 
 import pytest
@@ -20,8 +19,8 @@ from kkrunner import (
     RunState,
     RunStore,
 )
-from kkrunner.manager import ExecutionManager
-from kkrunner.postprocessing import ProcessingPending
+from kkrunner.runs.manager import RunManager
+from kkrunner.runs.processing import ProcessingPending
 
 
 def pending(manager, directory):
@@ -43,7 +42,7 @@ def pending(manager, directory):
 
 
 def test_opaque_metadata_is_json_and_recursively_immutable(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = pending(manager, tmp_path)
     with pytest.raises(TypeError):
         record.metadata["example"]["label"] = "changed"
@@ -65,7 +64,7 @@ def test_opaque_metadata_is_json_and_recursively_immutable(tmp_path):
 
 
 def test_corrupt_record_is_not_hidden_during_enumeration(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = pending(manager, tmp_path)
     path = manager.store._path(record)
     data = json.loads(path.read_text())
@@ -77,7 +76,7 @@ def test_corrupt_record_is_not_hidden_during_enumeration(tmp_path):
 
 def test_processing_claim_excludes_other_clients(tmp_path):
     store = RunStore(tmp_path / "runs")
-    manager = ExecutionManager(store)
+    manager = RunManager(store)
     record = pending(manager, tmp_path)
     entered, release = Event(), Event()
     results = []
@@ -91,7 +90,7 @@ def test_processing_claim_excludes_other_clients(tmp_path):
     thread.start()
     assert entered.wait(5)
     try:
-        other = ExecutionManager(RunStore(store.directory))
+        other = RunManager(RunStore(store.directory))
         with pytest.raises(ProcessingPending):
             other.retry_postprocessing(record.id, lambda outcome: pytest.fail("duplicate callback"))
     finally:
@@ -102,12 +101,13 @@ def test_processing_claim_excludes_other_clients(tmp_path):
 
 
 def test_process_death_releases_processing_claim(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = pending(manager, tmp_path)
     script = """
 import os, sys
-from kkrunner.manager import ExecutionManager, RunStore
-manager = ExecutionManager(RunStore(sys.argv[1]))
+from kkrunner.runs.manager import RunManager
+from kkrunner.runs.records import RunStore
+manager = RunManager(RunStore(sys.argv[1]))
 manager.retry_postprocessing(sys.argv[2], lambda outcome: os._exit(17))
 """
     child = subprocess.run([sys.executable, "-c", script, str(manager.store.directory), record.id], timeout=15)
@@ -122,7 +122,7 @@ manager.retry_postprocessing(sys.argv[2], lambda outcome: os._exit(17))
 
 
 def test_modified_artifacts_are_not_reprocessed(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = pending(manager, tmp_path)
     Path(record.files.output_file).write_text("different")
     with pytest.raises(ValueError, match="unchanged historical artifacts"):
@@ -132,7 +132,7 @@ def test_modified_artifacts_are_not_reprocessed(tmp_path):
 
 def test_managed_execution_needs_no_result_processor(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     run = manager.create_run(
         LocalExecutor(),
         ExecutionSpec(
@@ -149,7 +149,7 @@ def test_managed_execution_needs_no_result_processor(tmp_path, monkeypatch):
 
 def test_required_processing_can_be_supplied_after_restart(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     run = manager.create_run(
         LocalExecutor(),
         ExecutionSpec(
@@ -162,7 +162,7 @@ def test_required_processing_can_be_supplied_after_restart(tmp_path, monkeypatch
     with pytest.raises(ProcessingPending):
         run.run()
     assert manager.store.get(run.id).state == RunState.POSTPROCESSING
-    other = ExecutionManager(RunStore(manager.store.directory))
+    other = RunManager(RunStore(manager.store.directory))
     attached = other.attach(run.id, process_result=lambda outcome: int(Path(outcome.output_file).read_text()))
     assert attached.wait() == 42
     assert other.store.get(run.id).state == RunState.FINISHED
@@ -170,7 +170,7 @@ def test_required_processing_can_be_supplied_after_restart(tmp_path, monkeypatch
 
 def test_local_observation_detaches_without_stopping_backend(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     run = manager.create_run(
         LocalExecutor(),
         ExecutionSpec(
@@ -184,7 +184,7 @@ def test_local_observation_detaches_without_stopping_backend(tmp_path, monkeypat
     run.stop_observation()
     run.wait()
     assert manager.store.get(run.id).state == RunState.UNKNOWN
-    other = ExecutionManager(RunStore(manager.store.directory))
+    other = RunManager(RunStore(manager.store.directory))
     attached = other.attach(run.id)
     assert attached.wait().return_code == 0
     assert attached.backend_id == identity
@@ -194,7 +194,7 @@ def test_local_observation_detaches_without_stopping_backend(tmp_path, monkeypat
 def test_refresh_captures_artifacts_without_result_processor(tmp_path):
     from kkrunner import RunStatus
 
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     output = tmp_path / "stdout.txt"
     output.write_text("42")
     record = manager.new_record(directory=tmp_path, files=FileManifest(stdout=FileEntry(local_path=str(output))))
@@ -219,7 +219,7 @@ def test_refresh_captures_artifacts_without_result_processor(tmp_path):
     ],
 )
 def test_current_schema_rejects_invalid_field_types(tmp_path, field, value):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = pending(manager, tmp_path)
     path = manager.store._path(record)
     data = json.loads(path.read_text())
@@ -249,7 +249,7 @@ def test_failed_download_can_reattach_to_preserved_backend_receipt(tmp_path, mon
 
     transport = Transport()
     executor = RemoteEndpointExecutor(transport, command=(sys.executable, "-m", "kkrunner", "remote"))
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     run = manager.create_run(
         executor,
         ExecutionSpec(

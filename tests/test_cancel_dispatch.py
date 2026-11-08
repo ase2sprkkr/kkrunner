@@ -2,8 +2,10 @@
 
 from threading import Event, Lock
 from types import SimpleNamespace
+
 import pytest
-from kkrunner.base import dispatch_cancellation, request_cancellation
+
+from kkrunner.runs.base import dispatch_cancellation, request_cancellation
 
 
 def test_cancel_dispatch_does_not_wait_for_backend():

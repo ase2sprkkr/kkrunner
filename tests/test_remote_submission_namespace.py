@@ -1,7 +1,9 @@
 import asyncio
+
 import pytest
+
 from kkrunner import ExecutionSpec, LaunchSpec
-from kkrunner.remote_endpoint import RemoteEndpointExecutor
+from kkrunner.remote.executor import RemoteEndpointExecutor
 
 
 class _Transport:

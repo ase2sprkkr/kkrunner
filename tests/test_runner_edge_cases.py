@@ -1,6 +1,7 @@
 import pytest
+
 from kkrunner import ExecutionSpec
-from kkrunner.remote import RemoteRunner
+from kkrunner.remote.runner import RemoteRunner
 
 
 def test_remote_cancel_before_submit_is_rejected(tmp_path):

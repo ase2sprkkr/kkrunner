@@ -1,13 +1,15 @@
 from dataclasses import replace
 from types import SimpleNamespace
-from kkrunner.base import LaunchSpec, RunState
-from kkrunner.manager import RunRecord
-from kkrunner.run_model import Execution, WorkingDirectory, FileManifest, FileEntry, FileMapping
-from kkrunner.endpoint import ExecutorEndpoint
-from kkrunner.local import LocalExecutor
-from kkrunner.manager import ExecutionManager, RunStore
-from kkrunner.psij import PsijExecutor, PsijRunner
-from kkrunner.remote_endpoint import _RemoteRun, _RemoteRunContext
+
+from kkrunner.backends.endpoint import ExecutorEndpoint
+from kkrunner.backends.local import LocalExecutor
+from kkrunner.backends.psij import PsijExecutor, PsijRunner
+from kkrunner.files.manifest import FileEntry, FileManifest, FileMapping
+from kkrunner.remote.executor import _RemoteRun, _RemoteRunContext
+from kkrunner.runs.base import LaunchSpec, RunState
+from kkrunner.runs.manager import RunManager
+from kkrunner.runs.model import Execution, WorkingDirectory
+from kkrunner.runs.records import RunRecord, RunStore
 
 
 class _AttachedRunner:
@@ -49,7 +51,7 @@ class _AttachExecutor(LocalExecutor):
 
 
 def test_manager_attach_forwards_initial_output_listener(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = manager.new_record(directory=tmp_path, metadata={"test": {"task": "SCF"}}, processing_required=True)
     record = replace(record, state=RunState.RUNNING, execution=record.execution.submitted("123"))
     manager.store.save(record)

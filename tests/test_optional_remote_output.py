@@ -1,11 +1,13 @@
 """Focused tests for optional remote artifact availability."""
 
 import asyncio
+
 import pytest
-from kkrunner.base import ExecutionSpec
-from kkrunner.remote import RemoteRunner, FileSyncPolicy
-from kkrunner.run_model import FileEntry, FileManifest
-from kkrunner.transport import LocalTransport
+
+from kkrunner.files.manifest import FileEntry, FileManifest, FileSyncPolicy
+from kkrunner.remote.runner import RemoteRunner
+from kkrunner.remote.transport import LocalTransport
+from kkrunner.runs.base import ExecutionSpec
 
 
 class _Executor:

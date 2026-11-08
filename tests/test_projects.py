@@ -1,11 +1,14 @@
 """Tests for persistent KKRunner projects."""
 
 from __future__ import annotations
+
 import json
 import multiprocessing
 import time
+
 import pytest
-from kkrunner.projects import (
+
+from kkrunner.projects.repository import (
     Project,
     ProjectConflictError,
     ProjectDeleteError,

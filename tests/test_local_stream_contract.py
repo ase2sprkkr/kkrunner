@@ -1,10 +1,12 @@
 """Explicit stream persistence must not depend on the other stream."""
 
 import sys
+
 import pytest
-from kkrunner import local
-from kkrunner.base import ExecutionSpec, RunState
-from kkrunner.local import LocalExecutor
+
+from kkrunner.backends import local
+from kkrunner.backends.local import LocalExecutor
+from kkrunner.runs.base import ExecutionSpec, RunState
 
 
 @pytest.mark.parametrize("store_stdout, store_stderr", ((True, True), (True, False), (False, True), (False, False)))

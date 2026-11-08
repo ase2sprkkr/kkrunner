@@ -6,9 +6,8 @@ FileEntry/FileMapping/FileManifest, FileState/FileVersion/FileFingerprint,
 ExecutionResources and ResourceOwnedRunner. Public exports live in `kkrunner`.
 `RunManager` tracks runs in an explicit RunStore without requiring a project.
 `ProjectExecutionManager` and ProjectRepository organize runs in projects.
-`kkrunner.ExecutionManager` remains an alias of ProjectExecutionManager;
-`kkrunner.manager.ExecutionManager` remains an alias of RunManager for existing
-clients. Use the explicit names for new code. Both use the same lifecycle.
+Both managers use the same lifecycle. Each public class has one name that
+describes its role.
 
 ASE2SPRKKR owns input preparation, executable selection, task definitions,
 template/callback resolution for TaskFile declarations, parsers, TaskResult and
@@ -61,7 +60,7 @@ reconcile_acknowledgements() method retries lost ACKs without changing outcomes.
 Recoverable download failures retain their backend outcome receipt until retry
 finishes; otherwise a later attach would lose authoritative backend completion. JSON writes use atomic replacement, file and directory
 fsync on POSIX; portable Windows directory durability is weaker as documented
-in _durability.py. Invalid records raise errors, including during enumeration.
+in `kkrunner.support.durability`. Invalid records raise errors, including during enumeration.
 
 Before submission the client/prepared calculation owns its open resources.
 Successful create_run transfers them to ResourceOwnedRunner. Creation/submission
@@ -79,18 +78,11 @@ KKRunner. A remote host needs only KKRunner and the desired executable (plus
 PSI/J for scheduler use). `ase2sprkkr remote` delegates only the end-user status/follow/cancel subset.
 `kkrunner-remote` is an alternate entry point for the same protocol implementation.
 
-Migration is split into extraction, metadata/API integration, and recovery changes.
-No duplicate runner implementations or result-processor registry is introduced.
-
-Tracked ASE2SPRKKR runs reject automatically deleted working directories
-(`directory=False`) and temporary stderr (`error_file=False`); callers select
-persistent paths to make restart recovery and history possible. Ordinary
-untracked temporary runs keep their previous cleanup behavior.
-
-TaskFile.effective_info is no longer part of the data type; ASE2SPRKKR clients
-can use result_file_definition_registry.info_for_task_file(declaration).
-Application-manager load_result/attach_sprkkr are replaced by the existing
-ASE2SPRKKR outputs functions load_project_result/attach_project_run.
+Application-specific preparation and historical result loading stay outside the
+runner. Applications retain their own parser and result-format registries and
+reconstruct results from namespaced metadata and verified files. They must retain
+working directories and artifacts for as long as execution or processing needs
+them. See the application guide for its storage policy and temporary-file rules.
 
 ## Reservations and filesystems
 
@@ -129,3 +121,28 @@ ASE2SPRKKR retains project definitions in its original application state
 namespace, while new-format run records use KKRunner's state namespace. Explicit
 project repositories retain their colocated run store. Old development records
 are not migrated, silently ignored within a store, or rewritten.
+
+
+## Package ownership
+
+| Package | Responsibility |
+| --- | --- |
+| `kkrunner.runs` | Run contracts, execution identity, immutable metadata, durable records, reservations and processing lifecycle. |
+| `kkrunner.backends` | Local and PSI/J implementations, endpoint identity, MPI launch and reusable executor pools. |
+| `kkrunner.remote` | Remote runner and executor, transports, wire framing, target service, receipts and worker supervision. |
+| `kkrunner.projects` | Project repository, project-bound manager and explicit project-manager resolution. |
+| `kkrunner.files` | TaskFile, manifests, transfer policy, pathname declarations, captured versions and artifact availability. |
+| `kkrunner.support` | Shared durability, locking, asynchronous and growing-stream utilities. |
+
+The root package exports the principal types from their defining modules;
+it does not implement a second API or provide compatibility classes. Imports
+inside the implementation use their defining modules. The former flat module
+paths are removed. The remote worker starts as `kkrunner.remote.worker`.
+
+`files` and `support` do not import the run lifecycle, projects, backends or
+remote service. File reservations use generic local path expansion without
+importing a transport. The manifest and execution identity are separate models.
+`runs` owns persistence and end-to-end completion; backend implementations report
+execution facts. `projects` adds project membership to that existing lifecycle.
+A scheduler job is the backend part of a run, while a run also includes staging,
+transfer and any required result processing.

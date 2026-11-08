@@ -1,7 +1,9 @@
 from types import SimpleNamespace
+
 import pytest
+
 from kkrunner import ExecutionSpec
-from kkrunner import psij as psij_backend
+from kkrunner.backends import psij as psij_backend
 
 
 class _JobSpec:
@@ -43,7 +45,7 @@ def _spec(tmp_path):
 @pytest.mark.parametrize("backend", ("slurm", "pbs"))
 def test_project_job_carries_kkrunner_identity(monkeypatch, tmp_path, backend):
     executor = _executor(monkeypatch, backend)
-    runner = executor.create_project_run(_spec(tmp_path), run_id="run-123")
+    runner = executor.create_managed_run(_spec(tmp_path), run_id="run-123")
     job_spec = runner._job.spec
     assert job_spec.environment == {"KKRunner_RUN_ID": "run-123"}
     if backend == "slurm":

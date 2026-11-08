@@ -1,10 +1,13 @@
 import asyncio
 import sys
+
 import pytest
-from kkrunner.base import ExecutionSpec, RunState
-from kkrunner.remote_endpoint import RemoteEndpointExecutor
-from kkrunner.stream_protocol import STREAM_MAGIC, FramedRunningCommand, StreamProtocolError, encode_stream_frame
-from kkrunner.transport import LocalTransport
+
+from kkrunner.remote.executor import RemoteEndpointExecutor
+from kkrunner.remote.stream import STREAM_MAGIC, FramedRunningCommand, StreamProtocolError, encode_stream_frame
+from kkrunner.remote.transport import LocalTransport
+from kkrunner.runs.base import ExecutionSpec, RunState
+
 from .test_remote import _launch, _processed_run
 
 
@@ -125,7 +128,7 @@ def test_remote_transport_stderr_never_enters_calculation_files(tmp_path):
 
 
 def test_framed_command_delivers_terminal_result_in_band():
-    from kkrunner.stream_protocol import encode_terminal_frame
+    from kkrunner.remote.stream import encode_terminal_frame
 
     async def check():
         command = FramedRunningCommand(
@@ -149,7 +152,7 @@ def test_framed_command_delivers_terminal_result_in_band():
     "payload", (b"null", b"[]", b"42", b'{"missing":"state"}', b'{"state":"invalid"}', b"{invalid")
 )
 def test_remote_terminal_frame_rejects_invalid_outcomes(payload):
-    from kkrunner.stream_protocol import _HEADER, read_stream_frames
+    from kkrunner.remote.stream import _HEADER, read_stream_frames
 
     async def check():
         reader = _reader_with(STREAM_MAGIC + _HEADER.pack(b"T", len(payload)) + payload)
@@ -160,7 +163,7 @@ def test_remote_terminal_frame_rejects_invalid_outcomes(payload):
 
 
 def test_malformed_terminal_frame_terminates_helper_and_preserves_protocol_error():
-    from kkrunner.stream_protocol import _HEADER
+    from kkrunner.remote.stream import _HEADER
 
     async def check():
         payload = b"null"
@@ -176,7 +179,7 @@ def test_malformed_terminal_frame_terminates_helper_and_preserves_protocol_error
 
 @pytest.mark.parametrize("state", tuple(RunState))
 def test_terminal_frame_accepts_every_run_state(state):
-    from kkrunner.stream_protocol import _HEADER, read_stream_frames
+    from kkrunner.remote.stream import _HEADER, read_stream_frames
 
     async def check():
         payload = ('{"state":"' + state.value + '"}').encode()

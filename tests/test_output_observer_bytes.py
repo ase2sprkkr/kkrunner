@@ -4,12 +4,14 @@ import asyncio
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+
 import pytest
-from kkrunner.base import OutputObservers
-from kkrunner.local import LocalRunner
-from kkrunner.local_project import _ObserverSink
-from kkrunner.psij import PsijRunner
-from kkrunner.remote import RemoteRunner
+
+from kkrunner.backends.local import LocalRunner
+from kkrunner.backends.local_managed import _ObserverSink
+from kkrunner.backends.psij import PsijRunner
+from kkrunner.remote.runner import RemoteRunner
+from kkrunner.runs.base import OutputObservers
 
 
 @pytest.mark.parametrize(
@@ -53,7 +55,7 @@ def test_remote_pump_delivers_bytes_without_runner_decoder():
 
 
 def test_psij_monitor_forwards_follow_bytes(monkeypatch):
-    import kkrunner.psij as psij_module
+    import kkrunner.backends.psij as psij_module
 
     received = []
 

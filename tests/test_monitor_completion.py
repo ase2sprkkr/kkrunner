@@ -2,8 +2,10 @@
 
 from threading import Event, Lock
 from types import SimpleNamespace
+
 import pytest
-from kkrunner.base import RunState, finish_monitor, start_monitor, wait_for_monitor
+
+from kkrunner.runs.base import RunState, finish_monitor, start_monitor, wait_for_monitor
 
 
 def _runner(callback=None, error=None):

@@ -1,6 +1,7 @@
 import pytest
+
 from kkrunner import RunState
-from kkrunner import remote_service
+from kkrunner.remote import service as remote_service
 
 
 def test_direct_remote_process_without_pending_identity_returns_none(tmp_path, monkeypatch):
@@ -59,7 +60,7 @@ def test_psij_recovery_returns_none_when_backend_has_no_match(monkeypatch):
 
 
 def test_ticket_and_outcome_share_configured_state_root(tmp_path, monkeypatch):
-    from kkrunner import remote_mailbox
+    from kkrunner.remote import mailbox as remote_mailbox
 
     key = "f" * 32
     monkeypatch.setenv("KKRunner_REMOTE_STATE_DIR", str(tmp_path / "state"))
@@ -84,5 +85,5 @@ def test_ticket_uses_xdg_state_home_without_override(tmp_path, monkeypatch):
 
 
 def test_ticket_validation_is_independent_from_receipt_layout():
-    with pytest.raises(ValueError, match="Invalid project run id"):
+    with pytest.raises(ValueError, match="Invalid persistent run id"):
         remote_service._submission_ticket("../invalid")

@@ -1,14 +1,17 @@
 import os
 import stat
 from pathlib import Path
+
 import pytest
-import kkrunner._durability as durability
-import kkrunner.records as records_module
-import kkrunner.manager as manager_module
-from kkrunner.base import RunState
-from kkrunner.endpoint import ExecutorEndpoint
-from kkrunner.run_model import FileManifest, FileEntry
-from kkrunner.manager import ExecutionManager, RunStore
+
+import kkrunner.runs.manager as manager_module
+import kkrunner.runs.records as records_module
+import kkrunner.support.durability as durability
+from kkrunner.backends.endpoint import ExecutorEndpoint
+from kkrunner.files.manifest import FileEntry, FileManifest
+from kkrunner.runs.base import RunState
+from kkrunner.runs.manager import RunManager
+from kkrunner.runs.records import RunStore
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="strong directory fsync semantics are currently POSIX-only")
 
@@ -74,7 +77,7 @@ def test_run_store_uses_durable_json_writer(tmp_path, monkeypatch):
 
     monkeypatch.setattr(records_module, "durable_write_json", tracked_write)
     store = RunStore(tmp_path / "runs")
-    manager = ExecutionManager(store)
+    manager = RunManager(store)
     record = manager.new_record(directory=tmp_path, metadata={"test": {"task": "SCF"}}, processing_required=True)
     store.save(record)
     assert len(calls) == 1
@@ -86,7 +89,7 @@ def test_reserve_syncs_inputs_before_submitting_record(tmp_path, monkeypatch):
     input_file = tmp_path / "input.inp"
     input_file.write_text("input")
     store = RunStore(tmp_path / "runs")
-    manager = ExecutionManager(store)
+    manager = RunManager(store)
     record = manager.new_record(
         directory=tmp_path,
         endpoint=ExecutorEndpoint(),
@@ -113,7 +116,7 @@ def test_artifact_publication_syncs_outputs_before_terminal_record(tmp_path, mon
     output_file = tmp_path / "output.out"
     output_file.write_text("result")
     store = RunStore(tmp_path / "runs")
-    manager = ExecutionManager(store)
+    manager = RunManager(store)
     record = manager.new_record(
         directory=tmp_path,
         files=FileManifest(stdout=FileEntry(local_path=str(output_file))),

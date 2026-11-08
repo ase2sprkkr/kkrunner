@@ -17,7 +17,7 @@ from kkrunner import (
     RunStore,
     SshTransport,
 )
-from kkrunner.manager import submission_conflicts
+from kkrunner.runs.conflicts import submission_conflicts
 
 
 def test_default_remote_root_resolves_before_reservation_without_staging(tmp_path):

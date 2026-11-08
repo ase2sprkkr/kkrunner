@@ -1,8 +1,10 @@
 """Regression tests for the transient supervisor FOLLOW service."""
 
 import asyncio
+
 import pytest
-from kkrunner.remote_supervisor_stream import SupervisorStreams, _Follower, _HIGH, follow_socket, frame
+
+from kkrunner.remote.supervisor import _HIGH, SupervisorStreams, _Follower, follow_socket, frame
 
 
 def test_supervisor_live_replay_and_terminal(tmp_path):
@@ -398,7 +400,7 @@ def test_supervisor_start_closes_streams_and_directory_on_socket_bind_error(tmp_
 
 
 def test_supervisor_start_closes_bound_server_if_chmod_fails(tmp_path, monkeypatch):
-    from kkrunner import remote_supervisor_stream as module
+    from kkrunner.remote import supervisor as module
 
     def fail_chmod(path, mode):
         raise OSError("socket permissions unavailable")

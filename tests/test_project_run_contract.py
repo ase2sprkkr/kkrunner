@@ -1,8 +1,9 @@
 """Project tracking is opt-in by project identity, never by a persistent flag."""
 
 import pytest
-from kkrunner.persistence import resolve_project_manager
-from kkrunner.projects import ProjectRepository
+
+from kkrunner.projects.repository import ProjectRepository
+from kkrunner.projects.resolution import resolve_project_manager
 
 
 def test_untracked_run_has_no_store():

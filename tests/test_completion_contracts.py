@@ -1,11 +1,12 @@
 import pytest
-from kkrunner import FileEntry, FileManifest, RunState, RunStore, RunStatus
-from kkrunner.manager import ExecutionManager
+
+from kkrunner import FileEntry, FileManifest, RunState, RunStatus, RunStore
+from kkrunner.runs.manager import RunManager
 
 
 @pytest.mark.parametrize("optional", [False, True])
 def test_missing_output_respects_optionality(tmp_path, optional):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     record = manager.new_record(
         directory=tmp_path,
         files=FileManifest(outputs=(FileEntry(local_path=str(tmp_path / "never-created"), optional=optional),)),
@@ -16,7 +17,7 @@ def test_missing_output_respects_optionality(tmp_path, optional):
 
 @pytest.mark.parametrize("terminal_state", [RunState.FINISHED, RunState.FAILED, RunState.CANCELLED])
 def test_refresh_acknowledges_terminal_receipt_after_commit(tmp_path, monkeypatch, terminal_state):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     calls = []
 
     class Backend:
@@ -33,8 +34,9 @@ def test_refresh_acknowledges_terminal_receipt_after_commit(tmp_path, monkeypatc
 
 
 def test_completion_callback_can_read_its_own_finished_result(tmp_path):
-    from kkrunner import ExecutionSpec, LocalExecutor
     from threading import Event
+
+    from kkrunner import ExecutionSpec, LocalExecutor
 
     ended, results = Event(), []
     run = None
@@ -50,7 +52,7 @@ def test_completion_callback_can_read_its_own_finished_result(tmp_path):
 
 
 def test_failed_ack_is_reconciled_without_changing_terminal_outcome(tmp_path, monkeypatch):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     calls = []
 
     class Backend:
@@ -74,7 +76,7 @@ def test_failed_artifact_observation_prevents_processing_success(tmp_path):
     from kkrunner import ArtifactAvailabilityState
 
     # A callback cannot publish FINISHED after a concurrent artifact failure.
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     path = tmp_path / "out"
     path.write_text("answer")
     record = manager.new_record(
@@ -94,7 +96,7 @@ def test_failed_artifact_observation_prevents_processing_success(tmp_path):
 def test_download_retry_retains_backend_receipt_until_success(tmp_path, monkeypatch):
     from kkrunner import FailurePhase
 
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     acknowledgements = []
     backend = type("Backend", (), {"acknowledge": lambda self, record: acknowledgements.append(record.id)})()
     monkeypatch.setattr(manager, "executor_for", lambda record: backend)
@@ -122,7 +124,7 @@ def test_download_retry_retains_backend_receipt_until_success(tmp_path, monkeypa
 
 @pytest.mark.parametrize("state", [RunState.FINISHED, RunState.FAILED, RunState.CANCELLED])
 def test_attach_rejects_durable_terminal_record_before_backend_access(tmp_path, state):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     stale = manager.new_record(directory=tmp_path)
     manager.complete(stale, state=state, return_code=0)
     with pytest.raises(RuntimeError, match="already terminal"):
@@ -131,10 +133,10 @@ def test_attach_rejects_durable_terminal_record_before_backend_access(tmp_path, 
 
 def test_other_observer_completion_cannot_deliver_raw_application_result(tmp_path):
     from kkrunner import ExecutionOutcome, ProcessingPending
-    from kkrunner.manager import ProjectRunner
-    from kkrunner.postprocessing import PostprocessingRunner
+    from kkrunner.runs.manager import PersistentRunner
+    from kkrunner.runs.processing import PostprocessingRunner
 
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     stale = manager.new_record(directory=tmp_path, processing_required=True)
     stale = manager.transition(stale, state=RunState.RUNNING)
     manager.complete(stale, state=RunState.FINISHED, return_code=0)
@@ -149,7 +151,7 @@ def test_other_observer_completion_cannot_deliver_raw_application_result(tmp_pat
             return self.result
 
     observed = PostprocessingRunner(Raw(), None)
-    run = ProjectRunner(manager, object(), observed, stale)
+    run = PersistentRunner(manager, object(), observed, stale)
     delivered = []
     observed.callback = lambda result: manager._complete(run, result, delivered.append)
     run.start()

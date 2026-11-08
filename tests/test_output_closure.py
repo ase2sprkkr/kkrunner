@@ -1,11 +1,13 @@
 """Output handle lifecycle shared by local, persistent and remote runners."""
 
 import asyncio
+
 import pytest
-from kkrunner.base import ExecutionSpec, RunState, close_output_files
-from kkrunner.local import LocalRunner
-from kkrunner.local_project import LocalProjectRunner
-from kkrunner.remote import RemoteRunner
+
+from kkrunner.backends.local import LocalRunner
+from kkrunner.backends.local_managed import ManagedLocalRunner
+from kkrunner.remote.runner import RemoteRunner
+from kkrunner.runs.base import ExecutionSpec, RunState, close_output_files
 
 
 class _TrackedOutput:
@@ -33,13 +35,13 @@ def test_local_runners_close_unique_output_handles(monkeypatch, tmp_path, backen
         async def fail_to_launch(_spec):
             raise RuntimeError("launch failed")
 
-        monkeypatch.setattr("kkrunner.local.start_local_process", fail_to_launch)
+        monkeypatch.setattr("kkrunner.backends.local.start_local_process", fail_to_launch)
         runner = LocalRunner(spec)
         with pytest.raises(RuntimeError, match="launch failed"):
             asyncio.run(runner._execute())
         assert runner.state == RunState.FAILED
     else:
-        runner = LocalProjectRunner(None, spec)
+        runner = ManagedLocalRunner(None, spec)
         monkeypatch.setattr(runner, "_monitor", lambda: None)
         runner._thread_main()
         assert runner._done.is_set()
@@ -102,7 +104,7 @@ def test_remote_monitor_closes_merged_output_once_after_follow_failure(tmp_path)
 )
 def test_local_project_cleanup_attempts_all_stages(tmp_path, monkeypatch, monitor_fails, finish_fails, close_fails):
     """The first failure wins, but all cleanup and completion still happen."""
-    from kkrunner.base import FailurePhase
+    from kkrunner.runs.base import FailurePhase
 
     calls = []
     callbacks = []
@@ -119,7 +121,7 @@ def test_local_project_cleanup_attempts_all_stages(tmp_path, monkeypatch, monito
             if close_fails:
                 raise errors[2]
 
-    runner = LocalProjectRunner(
+    runner = ManagedLocalRunner(
         None,
         ExecutionSpec(argv=("true",), input_file=None, directory=str(tmp_path), output_file=Output()),
         callback=lambda result: callbacks.append(result),

@@ -1,17 +1,18 @@
 from dataclasses import asdict
+
 import pytest
-from kkrunner.base import LaunchSpec
-from kkrunner.endpoint import ExecutorEndpoint
-from kkrunner.run_model import (
+
+from kkrunner.backends.endpoint import ExecutorEndpoint
+from kkrunner.files.manifest import (
     ArtifactAvailabilityState,
     CacheEntry,
-    Execution,
     FileEntry,
     FileManifest,
     FileMapping,
     FileSyncPolicy,
-    WorkingDirectory,
 )
+from kkrunner.runs.base import LaunchSpec
+from kkrunner.runs.model import Execution, WorkingDirectory
 
 
 def test_execution_roundtrip_includes_backend_and_both_directories():
@@ -228,12 +229,11 @@ def test_legacy_duplicate_stderr_declaration_is_updated_together():
     assert updated.output_files == (path,)
 
 
-def test_availability_enum_is_shared_between_model_and_manager():
+def test_public_availability_enum_is_the_manifest_enum():
     from kkrunner import ArtifactAvailabilityState
-    from kkrunner.manager import ArtifactAvailabilityState as ManagerState
-    from kkrunner.run_model import ArtifactAvailabilityState as ModelState
+    from kkrunner.files.manifest import ArtifactAvailabilityState as ModelState
 
-    assert ModelState is ManagerState is ArtifactAvailabilityState
+    assert ModelState is ArtifactAvailabilityState
     assert {state.value for state in ModelState} == {"pending", "available", "failed", "skipped"}
 
 
@@ -254,7 +254,7 @@ def test_invalid_artifact_availability_is_rejected():
 
 
 def test_file_sync_policy_validation_uses_the_runtime_enum():
-    from kkrunner.remote import FileSyncPolicy as RemoteFileSyncPolicy
+    from kkrunner.files.manifest import FileSyncPolicy as RemoteFileSyncPolicy
 
     assert RemoteFileSyncPolicy is FileSyncPolicy
     for input_policy in FileSyncPolicy:
@@ -329,6 +329,7 @@ def test_manifest_rejects_cache_aliasing_stdout(tmp_path):
 
 def test_manifest_preserves_cache_optionality_and_roundtrips(tmp_path):
     from types import SimpleNamespace
+
     from kkrunner import TaskFile
 
     spec = SimpleNamespace(
@@ -370,6 +371,7 @@ def test_manifest_rejects_named_stdin_write_collisions(tmp_path, colliding_role)
 @pytest.mark.parametrize("primary_is_taskfile", [True, False])
 def test_primary_input_rejects_optional_taskfile_declaration(tmp_path, primary_is_taskfile):
     from types import SimpleNamespace
+
     from kkrunner import TaskFile
 
     primary = tmp_path / "main.inp"
@@ -390,6 +392,7 @@ def test_primary_input_rejects_optional_taskfile_declaration(tmp_path, primary_i
 @pytest.mark.parametrize("optional_first", [True, False])
 def test_duplicate_input_declarations_with_conflicting_optionality_fail(tmp_path, optional_first):
     from types import SimpleNamespace
+
     from kkrunner import TaskFile
 
     optional = TaskFile(tmp_path / "auxiliary.dat", optional=True)
@@ -410,6 +413,7 @@ def test_duplicate_input_declarations_with_conflicting_optionality_fail(tmp_path
 
 def test_consistent_input_optionality_survives_duplicate_references(tmp_path):
     from types import SimpleNamespace
+
     from kkrunner import TaskFile
 
     primary = tmp_path / "main.inp"

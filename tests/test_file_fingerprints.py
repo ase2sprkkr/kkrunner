@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kkrunner.file_fingerprints import FileFingerprint, file_fingerprint
+from kkrunner.files.fingerprints import FileFingerprint, file_fingerprint
 
 
 def test_file_fingerprint_matches_stat_and_changes_on_rewrite(tmp_path):

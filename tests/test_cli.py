@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import kkrunner.remote_service as remote_service
-from kkrunner.remote_protocol import CONTROL_PROTOCOL_VERSION
+import kkrunner.remote.service as remote_service
 from kkrunner import cli as remote_command
+from kkrunner.remote.protocol import CONTROL_PROTOCOL_VERSION
 
 
 def remote_args(**kwargs):
@@ -60,7 +60,7 @@ def test_submit_command_passes_complete_request_to_stateless_service(monkeypatch
 
 def test_resolve_mpi_command_preserves_integer_process_count(monkeypatch):
     monkeypatch.setattr(
-        "kkrunner.mpi.find_default_mpi_launcher",
+        "kkrunner.backends.mpi.find_default_mpi_launcher",
         lambda: ("mpirun",),
     )
     monkeypatch.setattr(remote_command.sys, "stdin", io.StringIO('{"mpi": 4}'))

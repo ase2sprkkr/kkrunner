@@ -1,7 +1,10 @@
 import asyncio
+
 import pytest
-from kkrunner import ExecutionSpec, RunState, FileManifest, FileEntry
-from kkrunner.remote import FileSyncPolicy, RemoteRunner
+
+from kkrunner import ExecutionSpec, FileEntry, FileManifest, RunState
+from kkrunner.files.manifest import FileSyncPolicy
+from kkrunner.remote.runner import RemoteRunner
 
 
 class _Follow:
@@ -130,8 +133,8 @@ def test_diagnostic_download_failure_preserves_backend_outcome(tmp_path, backend
 
 def test_remote_stderr_incomplete_after_success_is_download_failure(tmp_path):
     """FINISHED must not hide a truncated stderr FOLLOW stream."""
-    from kkrunner.base import FailurePhase
-    from kkrunner.remote_endpoint import _RemoteRun
+    from kkrunner.remote.executor import _RemoteRun
+    from kkrunner.runs.base import FailurePhase
 
     stdout_path = tmp_path / "run.out"
     stderr_path = tmp_path / "run.err"
@@ -173,7 +176,7 @@ def test_remote_stderr_incomplete_after_success_is_download_failure(tmp_path):
 
 def test_follow_write_is_idempotent_across_attached_clients(tmp_path):
     """Two clients consuming the same chunks must not duplicate the output."""
-    from kkrunner.remote import RemoteRunner
+    from kkrunner.remote.runner import RemoteRunner
 
     destination = tmp_path / "output"
     destination.write_bytes(b"abc")

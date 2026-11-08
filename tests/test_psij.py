@@ -4,10 +4,12 @@ import threading
 from dataclasses import replace
 from datetime import timedelta
 from types import SimpleNamespace
+
 import pytest
-from kkrunner.base import ExecutionSpec, LaunchSpec, RunState
-from kkrunner import RunRecord, Execution, WorkingDirectory, ExecutorEndpoint, FileManifest, FileEntry
-from kkrunner import psij as psij_backend
+
+from kkrunner import Execution, ExecutorEndpoint, FileEntry, FileManifest, RunRecord, WorkingDirectory
+from kkrunner.backends import psij as psij_backend
+from kkrunner.runs.base import ExecutionSpec, LaunchSpec, RunState
 
 
 class _Result:
@@ -363,7 +365,7 @@ def test_psij_project_manifest_marks_concrete_and_wildcard_files(monkeypatch, tm
         stdout=FileEntry(local_path=str(tmp_path / "run.out"), availability_state="pending"),
         outputs=(FileEntry(local_path=str(tmp_path / "data-*.bin"), availability_state="pending"),),
     )
-    runner = executor.create_project_run(
+    runner = executor.create_managed_run(
         ExecutionSpec(
             argv=("program",), input_file=None, directory=str(tmp_path), output_file=str(tmp_path / "run.out")
         ),
@@ -384,7 +386,7 @@ def test_psij_missing_optional_output_is_skipped(monkeypatch, tmp_path):
     files = FileManifest(
         outputs=(FileEntry(local_path=str(tmp_path / "optional.dat"), optional=True, availability_state="pending"),)
     )
-    runner = executor.create_project_run(
+    runner = executor.create_managed_run(
         ExecutionSpec(argv=("program",), input_file=None, directory=str(tmp_path), output_file=None), run_id="optional"
     )
     runner.set_manifest(files)
@@ -546,14 +548,14 @@ def test_psij_status_and_attach_check_complete_endpoint(monkeypatch, tmp_path):
 
 
 def test_psij_uncertain_submit_without_native_id_stays_recoverable(monkeypatch, tmp_path):
-    from kkrunner.base import SubmissionNotStarted
+    from kkrunner.runs.base import SubmissionNotStarted
 
     class FailingBackend(_Backend):
         def submit(self, job):
             raise OSError("scheduler reply lost")
 
     executor = _executor(monkeypatch, FailingBackend())
-    runner = executor.create_project_run(
+    runner = executor.create_managed_run(
         ExecutionSpec(
             argv=("program",), directory=str(tmp_path), input_file=None, output_file=str(tmp_path / "run.out")
         ),
@@ -567,10 +569,10 @@ def test_psij_uncertain_submit_without_native_id_stays_recoverable(monkeypatch, 
 
 
 def test_psij_preparation_failure_is_definitively_not_submitted(monkeypatch, tmp_path):
-    from kkrunner.base import FailurePhase, SubmissionNotStarted
+    from kkrunner.runs.base import FailurePhase, SubmissionNotStarted
 
     executor = _executor(monkeypatch, _Backend())
-    runner = executor.create_project_run(
+    runner = executor.create_managed_run(
         ExecutionSpec(
             argv=("program",), directory=str(tmp_path), input_file=None, output_file=str(tmp_path / "run.out")
         ),
@@ -619,7 +621,7 @@ def test_psij_executor_attaches_to_native_job(monkeypatch, tmp_path):
     error.write_bytes(b"")
     run = _psij_run(tmp_path, "456")
     runner = executor.attach(run)
-    result = runner.wait()
+    runner.wait()
     assert backend.attached == "456"
     assert runner.backend_id == "456"
     assert runner.state == RunState.FINISHED
@@ -895,7 +897,8 @@ def test_psij_wait_terminal_status_overrides_stale_job_status(monkeypatch, tmp_p
 
 
 def test_psij_attached_new_status_does_not_resubmit(monkeypatch, tmp_path):
-    from kkrunner.manager import ExecutionManager, RunStore
+    from kkrunner.runs.manager import RunManager
+    from kkrunner.runs.records import RunStore
 
     class PendingAttachBackend(_Backend):
         def submit(self, job):
@@ -911,7 +914,7 @@ def test_psij_attached_new_status_does_not_resubmit(monkeypatch, tmp_path):
     output = tmp_path / "run.out"
     output.write_bytes(b"existing output")
     record = _psij_run(tmp_path, "456")
-    manager = ExecutionManager(RunStore(tmp_path / "history"))
+    manager = RunManager(RunStore(tmp_path / "history"))
     (tmp_path / "run.err").write_text("")
     manager.store.save(record)
     run = manager.attach(record, executor=executor, process_result=lambda outcome: outcome)
@@ -924,7 +927,7 @@ def test_psij_attached_new_status_does_not_resubmit(monkeypatch, tmp_path):
 
 
 def test_psij_output_permission_error_is_unknown_not_execution_failure(monkeypatch, tmp_path):
-    from kkrunner.growing_file_tail import GrowingFileTail
+    from kkrunner.support.growing_file_tail import GrowingFileTail
 
     executor = _executor(monkeypatch, _Backend())
     runner = executor.create_run(
@@ -974,11 +977,12 @@ def test_psij_terminal_wait_without_exit_does_not_use_stale_status(monkeypatch, 
 
 
 def test_psij_confirmed_completion_is_not_undone_by_unknown_refresh(monkeypatch, tmp_path):
-    from kkrunner.manager import ExecutionManager, RunStore
-    from kkrunner.base import RunStatus
+    from kkrunner.runs.base import RunStatus
+    from kkrunner.runs.manager import RunManager
+    from kkrunner.runs.records import RunStore
 
-    executor = _executor(monkeypatch, _Backend())
-    manager = ExecutionManager(RunStore(tmp_path / "history"))
+    _executor(monkeypatch, _Backend())
+    manager = RunManager(RunStore(tmp_path / "history"))
     record = manager.new_record(
         directory=tmp_path, endpoint=None, metadata={"test": {"task": "DOS"}}, processing_required=True
     )
@@ -1111,7 +1115,8 @@ def test_psij_status_only_cache_is_bounded(monkeypatch):
 
 
 def test_project_observer_detaches_without_stopping_other_attached_client(monkeypatch, tmp_path):
-    from kkrunner.manager import ExecutionManager, RunStore
+    from kkrunner.runs.manager import RunManager
+    from kkrunner.runs.records import RunStore
 
     class ActiveBackend(_Backend):
         def attach(self, job, native_id):
@@ -1122,7 +1127,7 @@ def test_project_observer_detaches_without_stopping_other_attached_client(monkey
     executor = _executor(monkeypatch, ActiveBackend())
     record = _psij_run(tmp_path, "running-job")
     store = RunStore(tmp_path / "history")
-    manager = ExecutionManager(store)
+    manager = RunManager(store)
     (tmp_path / "run.out").write_text("result")
     (tmp_path / "run.err").write_text("")
     store.save(record)

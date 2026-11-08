@@ -1,42 +1,22 @@
-"""Calculation execution subsystem."""
+"""Program-independent execution, file manifests and durable run management."""
 
-from .file_fingerprints import FileFingerprint
-from .file_versions import FileState, FileVersion, FileVersionCaptureError
-from .task_file import TaskFile
-from .base import (
-    ExecutionOutcome,
-    BackendRunner,
-    ManagedRunner,
-    ExecutionResources,
-    ExecutionSpec,
-    Executor,
-    FailurePhase,
-    LaunchSpec,
-    MpiNotFoundWarning,
-    MpiSpec,
-    ResourceOwnedRunner,
-    Runner,
-    RunState,
-    RunStatus,
+from kkrunner.backends.endpoint import ExecutorEndpoint
+from kkrunner.backends.local import LocalExecutor, LocalRunner
+from kkrunner.backends.pool import ExecutorPool, default_executor_pool
+from kkrunner.backends.psij import PsijExecutor, PsijRunner
+from kkrunner.files.fingerprints import FileFingerprint
+from kkrunner.files.manifest import (
+    ArtifactAvailabilityState,
+    CacheEntry,
+    FileEntry,
+    FileManifest,
+    FileMapping,
+    FileSyncPolicy,
 )
-from .run_model import (
-    ArtifactAvailabilityState, Execution, WorkingDirectory, FileEntry,
-    CacheEntry, FileMapping, FileManifest,
-)
-from .endpoint import ExecutorEndpoint
-from .local import LocalExecutor, LocalRunner
-from .manager import (
-    CorruptRunRecord,
-    HistoricalFileMismatchError,
-    DuplicateSubmissionError,
-    ProjectRunner,
-    RunRecord,
-    RunStore,
-    RunManager,
-)
-from .pool import ExecutorPool, default_executor_pool
-from .postprocessing import PostprocessingRunner, ProcessingPending
-from .projects import (
+from kkrunner.files.task_file import TaskFile
+from kkrunner.files.versions import FileState, FileVersion, FileVersionCaptureError
+from kkrunner.projects.manager import ProjectExecutionManager
+from kkrunner.projects.repository import (
     Project,
     ProjectConflictError,
     ProjectDeleteError,
@@ -44,13 +24,29 @@ from .projects import (
     ProjectRepositoryError,
     default_projects_directory,
 )
-from .project_manager import ExecutionManager, ProjectExecutionManager
-from .psij import PsijExecutor, PsijRunner
-from .remote import FileSyncPolicy, RemoteRunner
-from .remote_endpoint import RemoteEndpointExecutor
-from .transport import LocalTransport, RunningCommand, SshTransport, Transport
-
-RemoteExecutor = RemoteEndpointExecutor
+from kkrunner.remote.executor import RemoteEndpointExecutor
+from kkrunner.remote.runner import RemoteRunner
+from kkrunner.remote.transport import LocalTransport, RunningCommand, SshTransport, Transport
+from kkrunner.runs.base import (
+    BackendRunner,
+    ExecutionOutcome,
+    ExecutionResources,
+    ExecutionSpec,
+    Executor,
+    FailurePhase,
+    LaunchSpec,
+    ManagedRunner,
+    MpiNotFoundWarning,
+    MpiSpec,
+    ResourceOwnedRunner,
+    Runner,
+    RunState,
+    RunStatus,
+)
+from kkrunner.runs.manager import DuplicateSubmissionError, HistoricalFileMismatchError, PersistentRunner, RunManager
+from kkrunner.runs.model import Execution, WorkingDirectory
+from kkrunner.runs.processing import PostprocessingRunner, ProcessingPending
+from kkrunner.runs.records import CorruptRunRecord, RunRecord, RunStore
 
 __all__ = [
     "ArtifactAvailabilityState",
@@ -84,10 +80,9 @@ __all__ = [
     "RunRecord",
     "RunStore",
     "CorruptRunRecord",
-    "ExecutionManager",
     "RunManager",
     "ProjectExecutionManager",
-    "ProjectRunner",
+    "PersistentRunner",
     "Project",
     "ProjectRepository",
     "ProjectRepositoryError",
@@ -101,7 +96,6 @@ __all__ = [
     "PsijExecutor",
     "PsijRunner",
     "FileSyncPolicy",
-    "RemoteExecutor",
     "RemoteEndpointExecutor",
     "RemoteRunner",
     "Transport",

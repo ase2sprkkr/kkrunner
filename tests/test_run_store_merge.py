@@ -1,5 +1,5 @@
 from kkrunner import ExecutorEndpoint, RunState, RunStore
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 
 def _record(manager, tmp_path):
@@ -9,7 +9,7 @@ def _record(manager, tmp_path):
 
 
 def test_stale_transition_cannot_regress_newer_lifecycle_state(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     original = _record(manager, tmp_path)
     submitting = manager.transition(original, state=RunState.SUBMITTING)
     running = manager.transition(submitting, state=RunState.RUNNING, execution=submitting.execution.submitted("123"))
@@ -21,7 +21,7 @@ def test_stale_transition_cannot_regress_newer_lifecycle_state(tmp_path):
 
 
 def test_none_does_not_erase_known_completion_metadata(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     original = _record(manager, tmp_path)
     stale = manager.transition(original, state=RunState.RUNNING)
     finished = manager.transition(stale, state=RunState.FINISHED, return_code=0, message="complete")
@@ -34,7 +34,7 @@ def test_none_does_not_erase_known_completion_metadata(tmp_path):
 
 
 def test_late_conflicting_final_state_does_not_replace_known_final_outcome(tmp_path):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     original = _record(manager, tmp_path)
     running = manager.transition(original, state=RunState.RUNNING)
     manager.transition(running, state=RunState.FINISHED, return_code=0)
@@ -46,7 +46,7 @@ def test_late_conflicting_final_state_does_not_replace_known_final_outcome(tmp_p
 def test_late_uncaptured_manifest_cannot_destroy_historical_snapshot(tmp_path):
     from kkrunner import FileEntry, FileManifest
 
-    manager = ExecutionManager(RunStore(tmp_path / "runs"))
+    manager = RunManager(RunStore(tmp_path / "runs"))
     output = tmp_path / "out"
     output.write_bytes(b"historical contents")
     original = manager.new_record(

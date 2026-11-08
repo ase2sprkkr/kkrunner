@@ -1,7 +1,9 @@
 from uuid import uuid4
+
 import pytest
+
 from kkrunner import FailurePhase, RunState
-from kkrunner import remote_mailbox
+from kkrunner.remote import mailbox as remote_mailbox
 
 
 @pytest.fixture(autouse=True)

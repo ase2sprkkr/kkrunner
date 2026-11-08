@@ -2,14 +2,17 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+
 import pytest
-from kkrunner.base import ExecutionSpec, LaunchSpec, RunState
-from kkrunner.manager import RunRecord
-from kkrunner.run_model import Execution, WorkingDirectory, FileManifest
-from kkrunner.endpoint import endpoint_for_executor
-from kkrunner.postprocessing import PostprocessingRunner
-from kkrunner.remote_endpoint import RemoteEndpointExecutor
-from kkrunner.transport import LocalTransport
+
+from kkrunner.backends.endpoint import endpoint_for_executor
+from kkrunner.files.manifest import FileManifest
+from kkrunner.remote.executor import RemoteEndpointExecutor
+from kkrunner.remote.transport import LocalTransport
+from kkrunner.runs.base import ExecutionSpec, LaunchSpec, RunState
+from kkrunner.runs.model import Execution, WorkingDirectory
+from kkrunner.runs.processing import PostprocessingRunner
+from kkrunner.runs.records import RunRecord
 
 
 def _executor(*, backend="local"):
@@ -166,7 +169,8 @@ def test_remote_executor_attach_rejects_reference_for_other_backend(tmp_path):
 
 def test_remote_attach_preserves_existing_partial_stream(tmp_path, monkeypatch):
     import asyncio
-    from kkrunner.run_model import FileEntry
+
+    from kkrunner.files.manifest import FileEntry
 
     local_root = tmp_path / "local"
     remote_root = tmp_path / "remote"

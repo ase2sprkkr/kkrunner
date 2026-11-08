@@ -1,7 +1,6 @@
 """SSH target contains only KKRunner, PSI/J and Python, without ASE."""
 
 import os
-from pathlib import Path
 import subprocess
 import time
 from threading import Event
@@ -9,7 +8,7 @@ from threading import Event
 import pytest
 
 from kkrunner import ExecutionSpec, LaunchSpec, RemoteEndpointExecutor, RunState, RunStore, SshTransport
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("KKRUNNER_RUN_DOCKER_TESTS") != "1", reason="set KKRUNNER_RUN_DOCKER_TESTS=1 for SSH integration"
@@ -73,7 +72,7 @@ def test_ssh_execution_detach_and_reconnect_without_application(docker_execution
         )
         local = tmp_path / "work"
         local.mkdir()
-        manager = ExecutionManager(RunStore(tmp_path / "runs"))
+        manager = RunManager(RunStore(tmp_path / "runs"))
         executor = RemoteEndpointExecutor(SshTransport("tester@127.0.0.1", options=options))
         spec = ExecutionSpec(
             [
@@ -95,7 +94,7 @@ def test_ssh_execution_detach_and_reconnect_without_application(docker_execution
         backend_id = run.backend_id
         run.stop_observation()
         run.wait()
-        other = ExecutionManager(RunStore(manager.store.directory))
+        other = RunManager(RunStore(manager.store.directory))
         attached = other.attach(run.id)
         outcome = attached.wait()
         assert outcome.return_code == 0, (attached.state, attached._runner.failure_message, other.store.get(run.id))

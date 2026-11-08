@@ -1,7 +1,7 @@
 """Independent self-review probes; assertions express the intended contract."""
 
-from dataclasses import replace
 import json
+from dataclasses import replace
 from threading import Event, Thread
 
 import pytest
@@ -19,12 +19,13 @@ from kkrunner import (
     RunState,
     RunStore,
 )
-from kkrunner.manager import ExecutionManager, submission_conflicts
-from kkrunner.postprocessing import PostprocessingRunner
+from kkrunner.runs.conflicts import submission_conflicts
+from kkrunner.runs.manager import RunManager
+from kkrunner.runs.processing import PostprocessingRunner
 
 
 def manager_at(tmp_path):
-    return ExecutionManager(RunStore(tmp_path / "runs"))
+    return RunManager(RunStore(tmp_path / "runs"))
 
 
 def test_save_cannot_replace_immutable_metadata(tmp_path):
@@ -170,7 +171,7 @@ def test_stdin_is_part_of_read_manifest(tmp_path):
 
 def test_remote_preflight_streams_close_on_submit_failure(tmp_path, monkeypatch):
     from kkrunner import LocalTransport, RemoteEndpointExecutor
-    from kkrunner.remote_endpoint import _RemoteRun
+    from kkrunner.remote.executor import _RemoteRun
 
     executor = RemoteEndpointExecutor(LocalTransport())
     raw = executor.create_run(ExecutionSpec(["unused"], directory=tmp_path, output_file=tmp_path / "stdout"))

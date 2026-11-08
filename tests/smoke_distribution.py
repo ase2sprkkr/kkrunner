@@ -2,31 +2,31 @@ import importlib.metadata as md
 import importlib.util
 import json
 import os
-from pathlib import Path
 import pkgutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import kkrunner
 from kkrunner import (
-    ExecutionManager,
     ExecutionSpec,
     LaunchSpec,
     LocalExecutor,
     LocalTransport,
+    ProcessingPending,
+    ProjectExecutionManager,
     ProjectRepository,
     RemoteEndpointExecutor,
     RunState,
-    ProcessingPending,
 )
 
 assert not os.environ.get("PYTHONPATH")
 assert importlib.util.find_spec("ase") is None
 assert importlib.util.find_spec("ase2sprkkr") is None
-for module in pkgutil.iter_modules(kkrunner.__path__):
-    if module.name not in ("__main__",):
-        __import__("kkrunner." + module.name)
+for module in pkgutil.walk_packages(kkrunner.__path__, kkrunner.__name__ + "."):
+    if not module.name.endswith("__main__"):
+        __import__(module.name)
 assert md.version("kkrunner") == kkrunner.__version__
 
 root = Path(tempfile.mkdtemp(prefix="kkrunner-distribution-"))
@@ -42,7 +42,7 @@ assert (root / "raw.out").read_text() == "42\n"
 
 projects = ProjectRepository(root / "projects")
 project = projects.create("Wheel review", directory=root)
-manager = ExecutionManager(project_repository=projects, project=project)
+manager = ProjectExecutionManager(project_repository=projects, project=project)
 run = manager.create_run(
     LocalExecutor(),
     ExecutionSpec(
@@ -57,7 +57,7 @@ try:
 except ProcessingPending:
     pass
 assert manager.store.get(run.id).state == RunState.POSTPROCESSING
-restarted = ExecutionManager(project_repository=projects, project=project)
+restarted = ProjectExecutionManager(project_repository=projects, project=project)
 attached = restarted.attach(run.id, process_result=lambda outcome: int(Path(outcome.output_file).read_text()))
 assert attached.wait() == 43
 assert restarted.store.get(run.id).state == RunState.FINISHED

@@ -1,6 +1,8 @@
 from threading import Event
 from types import SimpleNamespace
+
 import pytest
+
 from kkrunner import (
     DuplicateSubmissionError,
     ExecutionOutcome,
@@ -11,7 +13,7 @@ from kkrunner import (
     RunStatus,
     RunStore,
 )
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 
 class _RawRunner:
@@ -70,7 +72,7 @@ class _Executor(Executor):
         self.status_calls = []
         self.on_submit = None
 
-    def create_project_run(self, spec, *, run_id, callback=None):
+    def create_managed_run(self, spec, *, run_id, callback=None):
         runner = _RawRunner(on_submit=self.on_submit)
         self.runners.append(runner)
         return runner
@@ -91,7 +93,7 @@ def _spec(tmp_path, *, dataset="case"):
 
 
 def _manager(tmp_path):
-    return ExecutionManager(RunStore(tmp_path / "runs"), executor_pool=ExecutorPool())
+    return RunManager(RunStore(tmp_path / "runs"), executor_pool=ExecutorPool())
 
 
 def test_submit_persists_submitting_before_backend_call(tmp_path):

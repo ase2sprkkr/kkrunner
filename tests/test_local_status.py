@@ -1,21 +1,24 @@
-import pytest
 from types import SimpleNamespace
+
+import pytest
+
 from kkrunner import (
+    Execution,
+    ExecutorEndpoint,
+    FailurePhase,
+    FileEntry,
+    FileManifest,
     LocalExecutor,
     RunRecord,
     RunState,
-    Execution,
     WorkingDirectory,
-    ExecutorEndpoint,
-    FileEntry,
-    FileManifest,
-    FailurePhase,
 )
-from kkrunner import local_project, remote_service
+from kkrunner.backends import local_managed as local_project
+from kkrunner.remote import service as remote_service
 
 
 def test_disappeared_local_process_is_unknown(monkeypatch):
-    from kkrunner import remote_service
+    from kkrunner.remote import service as remote_service
 
     executor = LocalExecutor()
     handle = remote_service._encode_handle(

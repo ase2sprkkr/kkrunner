@@ -3,9 +3,10 @@
 import asyncio
 import os
 import sys
+
 import pytest
-from kkrunner import remote_process_worker
-from kkrunner.remote_supervisor_stream import follow_socket
+
+from kkrunner.remote import worker as remote_process_worker
 
 
 def _spec(tmp_path, socket_fd, *, detached, argv=None):
@@ -131,8 +132,8 @@ def test_failed_detached_launch_clears_previous_output(tmp_path, monkeypatch):
 def test_supervisor_output_failure_is_reported_without_losing_diagnosis(
     tmp_path, monkeypatch, failure, expected_phase, expected_message
 ):
-    from kkrunner.base import FailurePhase, RunState
-    from kkrunner.remote_supervisor_stream import SupervisorStreams
+    from kkrunner.remote.supervisor import SupervisorStreams
+    from kkrunner.runs.base import FailurePhase, RunState
 
     reported = []
     monkeypatch.setattr(
@@ -166,7 +167,7 @@ def test_supervisor_output_failure_is_reported_without_losing_diagnosis(
 
 
 def test_receipt_write_failure_never_emits_durable_terminal_claim(tmp_path, monkeypatch):
-    from kkrunner.remote_supervisor_stream import SupervisorStreams
+    from kkrunner.remote.supervisor import SupervisorStreams
 
     observed = []
     original_terminal = SupervisorStreams.terminal
@@ -232,7 +233,7 @@ def test_supervisor_pumps_both_binary_channels_to_separate_files(tmp_path, monke
 
 def test_unexpected_child_spawn_failure_is_classified_as_launch(tmp_path, monkeypatch):
     """Non-OSError failures before child creation still belong to LAUNCH."""
-    from kkrunner.base import FailurePhase, RunState
+    from kkrunner.runs.base import FailurePhase, RunState
 
     reported = []
 

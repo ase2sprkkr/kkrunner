@@ -3,18 +3,19 @@
 import json
 import sys
 
-
 help = "Control KKRunner execution on this machine."
 description = "Submit, inspect, follow and cancel remote execution handles."
 
 
 def parser(parser, *, user=False):
     if user:
-        from .remote_protocol import CONTROL_PROTOCOL_VERSION
+        from kkrunner.remote.protocol import CONTROL_PROTOCOL_VERSION
+
         parser.set_defaults(protocol_version=CONTROL_PROTOCOL_VERSION)
     else:
-        parser.add_argument("--protocol-version", type=int, required=True,
-                            help="remote control protocol version supplied by the client")
+        parser.add_argument(
+            "--protocol-version", type=int, required=True, help="remote control protocol version supplied by the client"
+        )
     actions = parser.add_subparsers(dest="remote_action", required=True)
 
     if not user:
@@ -66,7 +67,7 @@ class _FramedSink:
         self.kind = kind
 
     def write(self, data):
-        from .stream_protocol import encode_stream_frame
+        from kkrunner.remote.stream import encode_stream_frame
 
         self.stream.write(encode_stream_frame(self.kind, data))
 
@@ -75,10 +76,10 @@ class _FramedSink:
 
 
 def run(args, global_args):
-    from .remote_protocol import check_control_protocol
+    from kkrunner.remote.protocol import check_control_protocol
 
     check_control_protocol(args.protocol_version)
-    from .remote_service import (
+    from kkrunner.remote.service import (
         acknowledge_remote,
         acknowledge_submission,
         cancel_remote,
@@ -98,7 +99,7 @@ def run(args, global_args):
         _print_json(cancel_remote(args.remote_id))
     elif args.remote_action == "follow":
         if args.framed:
-            from .stream_protocol import STREAM_MAGIC
+            from kkrunner.remote.stream import STREAM_MAGIC
 
             stream = sys.stdout.buffer
             stream.write(STREAM_MAGIC)
@@ -118,7 +119,8 @@ def run(args, global_args):
             stderr_path=args.stderr_path,
         )
         if args.framed:
-            from .stream_protocol import encode_terminal_frame
+            from kkrunner.remote.stream import encode_terminal_frame
+
             stream.write(encode_terminal_frame(outcome))
             stream.flush()
     elif args.remote_action == "recover":
@@ -139,8 +141,8 @@ def run(args, global_args):
     elif args.remote_action == "ack":
         _print_json(acknowledge_remote(args.remote_id))
     elif args.remote_action == "resolve-mpi":
-        from .base import LaunchSpec
-        from .mpi import resolve_mpi_command
+        from kkrunner.backends.mpi import resolve_mpi_command
+        from kkrunner.runs.base import LaunchSpec
 
         request = json.load(sys.stdin)
         launch = LaunchSpec.from_mpi(request.get("mpi"))
@@ -151,6 +153,7 @@ def run(args, global_args):
 
 def main():
     import argparse
+
     root = argparse.ArgumentParser(prog="kkrunner")
     commands = root.add_subparsers(dest="command", required=True)
     parser(commands.add_parser("remote", help=description))
@@ -166,6 +169,7 @@ def user_parser(argument_parser):
 def remote_main():
     """Standalone machine-protocol executable, equivalent to kkrunner remote."""
     import argparse
+
     argument_parser = argparse.ArgumentParser(prog="kkrunner-remote")
     parser(argument_parser)
     run(argument_parser.parse_args(), None)

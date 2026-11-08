@@ -1,7 +1,8 @@
 """Shared close semantics across output files and owned resources."""
 
 import pytest
-from kkrunner.base import ExecutionResources, close_output_files
+
+from kkrunner.runs.base import ExecutionResources, close_output_files
 
 
 class _Closable:

@@ -1,5 +1,6 @@
-from threading import Event, Thread
+from threading import Event
 from types import SimpleNamespace
+
 from kkrunner import (
     ExecutionOutcome,
     Executor,
@@ -10,7 +11,7 @@ from kkrunner import (
     RunStatus,
     RunStore,
 )
-from kkrunner.manager import ExecutionManager
+from kkrunner.runs.manager import RunManager
 
 
 class _Executor(Executor):
@@ -65,7 +66,7 @@ class _RawRunner:
 
 
 def _record(tmp_path, executor, state=RunState.RUNNING):
-    manager = ExecutionManager(RunStore(tmp_path / "runs"), executor_pool=ExecutorPool())
+    manager = RunManager(RunStore(tmp_path / "runs"), executor_pool=ExecutorPool())
     endpoint = manager.register_executor(executor)
     record = manager.new_record(
         directory=str(tmp_path), endpoint=endpoint, metadata={"test": {"task": "DOS"}}, processing_required=True

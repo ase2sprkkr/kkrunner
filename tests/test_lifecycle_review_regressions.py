@@ -1,14 +1,13 @@
-import pytest
-import kkrunner.manager as manager_module
-from kkrunner.manager import ExecutionManager
-from kkrunner import ArtifactAvailabilityState, FailurePhase, FileManifest, FileEntry, RunState, RunStore
+import kkrunner.runs.manager as manager_module
+from kkrunner import ArtifactAvailabilityState, FailurePhase, FileEntry, FileManifest, RunState, RunStore
+from kkrunner.runs.manager import RunManager
 
 
 def test_result_snapshot_sync_failure_is_artifact_failure(tmp_path, monkeypatch):
     output = tmp_path / "result.out"
     output.write_text("result")
     store = RunStore(tmp_path / "runs")
-    manager = ExecutionManager(store)
+    manager = RunManager(store)
     record = manager.new_record(
         directory=tmp_path,
         files=FileManifest(stdout=FileEntry(local_path=str(output), availability_state="pending")),

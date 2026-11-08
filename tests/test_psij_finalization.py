@@ -1,8 +1,9 @@
-from types import SimpleNamespace
 from threading import Event
+from types import SimpleNamespace
+
 from kkrunner import RunState
-from kkrunner.base import OutputObservers
-from kkrunner.psij import PsijRunner
+from kkrunner.backends.psij import PsijRunner
+from kkrunner.runs.base import OutputObservers
 
 
 def test_psij_finalization_failure_overrides_completed_backend():
