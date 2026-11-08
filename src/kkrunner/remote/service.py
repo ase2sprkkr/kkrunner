@@ -538,7 +538,7 @@ def follow_remote(
         return asyncio.run(_follow_scheduler_async(remote_id, streams, paths, offsets, poll_interval))
     if handle["kind"] != "process":
         raise ValueError("Unknown execution backend")
-    from kkrunner.remote.supervisor import follow_socket
+    from kkrunner.remote.supervisor import SupervisorClosedBeforeFollow, follow_socket
 
     path = handle.get("socket_path")
     if path is None:
@@ -549,7 +549,7 @@ def follow_remote(
     def on_chunk(kind, offset, data):
         previous = offsets[kind]
         if previous is not None and offset != previous and paths[kind] is not None:
-            raise RuntimeError("Supervisor FOLLOW offset mismatch")
+            raise ValueError("Supervisor FOLLOW offset mismatch")
         offsets[kind] = offset + len(data)
         streams[kind].write(data)
         streams[kind].flush()
@@ -564,6 +564,17 @@ def follow_remote(
 
     try:
         return asyncio.run(drain_from_socket())
+    except SupervisorClosedBeforeFollow:
+        # A failed launch can finish after connect() but before the server
+        # handles FOLLOW. No protocol bytes or process output were received.
+        # Only its durable launch-failure receipt proves this harmless race;
+        # partial magic, truncated frames and other states remain errors.
+        if any(offset is not None and (type(offset) is not int or offset != 0) for offset in offsets.values()):
+            raise
+        status = status_remote(remote_id)
+        if status["state"] != RunState.FAILED.value or status.get("failure_phase") != FailurePhase.LAUNCH.value:
+            raise
+        return status
     except (FileNotFoundError, ConnectionRefusedError):
         # A completed supervisor has removed its transient socket. Replay
         # declared spools once, without the historical polling lifecycle.

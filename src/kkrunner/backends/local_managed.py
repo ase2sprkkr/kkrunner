@@ -222,7 +222,7 @@ class ManagedLocalRunner:
             self._state = RunState.UNKNOWN
             self._failure_message = "Observation detached"
             return self.result
-        except (OSError, ConnectionError, RuntimeError, ValueError) as exc:
+        except (OSError, ConnectionError, RuntimeError) as exc:
             # The follow channel is observational. A supervisor that has
             # already exited may have no socket, or no replayable spool.
             # Backend outcome is authoritative, never a guessed exit code.

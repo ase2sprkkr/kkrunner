@@ -368,3 +368,18 @@ assert (root / 'run.out').read_text() == '42\\n'
         subprocess.run([sys.executable, "-c", reconnect, str(tmp_path), run_id], check=True, timeout=25)
     finally:
         (tmp_path / "resume").touch()
+
+
+def test_managed_monitor_preserves_malformed_protocol_error(tmp_path, monkeypatch):
+    """A durable terminal state must not conceal an invalid wire greeting."""
+    from kkrunner.backends import local_managed
+
+    runner = LocalExecutor().create_managed_run(_spec(tmp_path), run_id=RUN_ID)
+    monkeypatch.setattr(runner, "_refresh", lambda: RunState.FAILED)
+
+    def malformed_follow(*args, **kwargs):
+        raise ValueError("Unknown supervisor stream protocol")
+
+    monkeypatch.setattr(local_managed, "follow_remote", malformed_follow)
+    with pytest.raises(ValueError, match="Unknown supervisor stream protocol"):
+        runner._monitor()

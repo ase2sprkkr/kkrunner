@@ -33,9 +33,19 @@ def frame(kind, offset, data):
     return _HEADER.pack(_CODES[kind], offset, len(data)) + data
 
 
+class SupervisorClosedBeforeFollow(asyncio.IncompleteReadError):
+    """The supervisor closed before sending any protocol bytes."""
+
+
 async def receive(reader):
     """Yield offset-bearing stream frames followed by terminal facts."""
-    if await reader.readexactly(len(MAGIC)) != MAGIC:
+    try:
+        magic = await reader.readexactly(len(MAGIC))
+    except asyncio.IncompleteReadError as exc:
+        if not exc.partial:
+            raise SupervisorClosedBeforeFollow(exc.partial, exc.expected) from exc
+        raise
+    if magic != MAGIC:
         raise ValueError("Unknown supervisor stream protocol")
     while True:
         code, offset, length = _HEADER.unpack(await reader.readexactly(_HEADER.size))

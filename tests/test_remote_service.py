@@ -823,3 +823,85 @@ def test_unverifiable_identity_prevents_releasing_calculation(tmp_path, monkeypa
             }
         )
     assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "wire, state, phase, recover",
+    [
+        (b"", RunState.FAILED, FailurePhase.LAUNCH, True),
+        (b"", RunState.FAILED, FailurePhase.EXECUTION, False),
+        (b"", RunState.RUNNING, None, False),
+        (b"", RunState.UNKNOWN, None, False),
+        (b"", RunState.FINISHED, None, False),
+        (b"A2S", RunState.FAILED, FailurePhase.LAUNCH, False),
+        (b"A2SFOLL1", RunState.FAILED, FailurePhase.LAUNCH, False),
+        (b"A2SFOLL1O\x00", RunState.FAILED, FailurePhase.LAUNCH, False),
+        (b"A2SFOLL1" + b"O" + b"\x00" * 15 + b"\x01", RunState.FAILED, FailurePhase.LAUNCH, False),
+    ],
+)
+def test_follow_recovers_only_empty_handshake_with_launch_failure_receipt(
+    tmp_path, monkeypatch, wire, state, phase, recover
+):
+    import asyncio
+
+    from kkrunner.remote import supervisor
+
+    _, remote_id, _ = _process_handle(tmp_path)
+    facts = remote_service._status_reply(state, 127, failure_phase=phase)
+    monkeypatch.setattr(remote_service, "status_remote", lambda handle: facts)
+
+    async def closed_socket(path, offsets, on_chunk):
+        reader = asyncio.StreamReader()
+        reader.feed_data(wire)
+        reader.feed_eof()
+        async for kind, offset, data in supervisor.receive(reader):
+            on_chunk(kind, offset, data)
+
+    monkeypatch.setattr(supervisor, "follow_socket", closed_socket)
+    out = io.BytesIO()
+    if recover:
+        assert remote_service.follow_remote(remote_id, out, io.BytesIO()) == facts
+        assert out.getvalue() == b""
+    else:
+        with pytest.raises(asyncio.IncompleteReadError):
+            remote_service.follow_remote(remote_id, out, io.BytesIO())
+
+
+def test_malformed_follow_greeting_is_not_hidden_by_launch_failure_receipt(tmp_path, monkeypatch):
+    import asyncio
+
+    from kkrunner.remote import supervisor
+
+    _, remote_id, _ = _process_handle(tmp_path)
+    monkeypatch.setattr(
+        remote_service, "status_remote",
+        lambda handle: remote_service._status_reply(RunState.FAILED, 127, failure_phase=FailurePhase.LAUNCH),
+    )
+
+    async def malformed_socket(*args):
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"BADMAGIC")
+        reader.feed_eof()
+        return await supervisor.receive(reader).__anext__()
+
+    monkeypatch.setattr(supervisor, "follow_socket", malformed_socket)
+    with pytest.raises(ValueError, match="Unknown supervisor stream protocol"):
+        remote_service.follow_remote(remote_id, io.BytesIO(), io.BytesIO())
+
+
+@pytest.mark.parametrize("offset", [-1, 1, False])
+def test_launch_failure_receipt_does_not_mask_rejected_follow_offset(tmp_path, monkeypatch, offset):
+    from kkrunner.remote import supervisor
+
+    _, remote_id, _ = _process_handle(tmp_path)
+    monkeypatch.setattr(
+        remote_service, "status_remote",
+        lambda handle: remote_service._status_reply(RunState.FAILED, 127, failure_phase=FailurePhase.LAUNCH),
+    )
+
+    async def closed_socket(*args):
+        raise supervisor.SupervisorClosedBeforeFollow(b"", len(supervisor.MAGIC))
+
+    monkeypatch.setattr(supervisor, "follow_socket", closed_socket)
+    with pytest.raises(supervisor.SupervisorClosedBeforeFollow):
+        remote_service.follow_remote(remote_id, io.BytesIO(), io.BytesIO(), stdout_offset=offset)

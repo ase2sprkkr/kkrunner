@@ -207,3 +207,12 @@ There is no remote package-installation bootstrap in KKRunner. Target KKRunner
 must already be installed for remote execution and these stateless file
 operations. Raw command execution and tar uploads do not invoke the service.
 Neither a persistent file server nor an OS-specific fallback is required.
+
+A direct supervisor can fail to launch a process and close its socket before a
+new follower receives the protocol greeting. Only an entirely empty greeting,
+zero or live-only offsets, and a durable `failed` / `launch` receipt permit
+recovery from that race. Partial greetings, truncated frames, invalid offsets,
+and malformed protocol data still raise errors. Managed local observation also
+preserves protocol validation errors after terminal completion; a receipt does
+not make malformed wire data valid. Declared stdout/stderr files are truncated
+before launch, so a failed launch cannot expose output from a previous run.
