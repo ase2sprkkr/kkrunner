@@ -5,7 +5,9 @@ from threading import Event, Thread
 
 import pytest
 
-from kkrunner import CorruptRunRecord, ExecutionResources, ResourceOwnedRunner, RunState, RunStore
+from kkrunner.runs import CorruptRunRecord
+from kkrunner.runs.base import ExecutionResources, ResourceOwnedRunner
+from kkrunner import RunState, RunStore
 from kkrunner.runs.manager import RunManager
 
 

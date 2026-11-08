@@ -3,7 +3,8 @@ import io
 
 import pytest
 
-from kkrunner import FailurePhase, RunState, RunStatus
+from kkrunner.runs import FailurePhase, RunStatus
+from kkrunner import RunState
 from kkrunner.backends import psij
 from kkrunner.remote import service as remote_service
 from kkrunner.remote import worker as remote_process_worker

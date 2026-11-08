@@ -8,10 +8,9 @@ applications are needed there only when the command itself uses them.
 .. code-block:: python
 
    from pathlib import Path
-   from kkrunner import (
-       ExecutionSpec, LaunchSpec, RemoteEndpointExecutor, RunManager, RunStore,
-       SshTransport,
-   )
+   from kkrunner import ExecutionSpec, RunManager, RunStore
+   from kkrunner.runs import LaunchSpec
+   from kkrunner.remote import RemoteEndpointExecutor, SshTransport
 
    directory = Path("remote-example").absolute()
    directory.mkdir(exist_ok=True)
@@ -61,9 +60,9 @@ It is useful for development and does not require a second machine:
    import sys
    import tempfile
    from pathlib import Path
-   from kkrunner import (
-       ExecutionSpec, LaunchSpec, LocalTransport, RemoteEndpointExecutor,
-   )
+   from kkrunner import ExecutionSpec
+   from kkrunner.runs import LaunchSpec
+   from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
 
    workspace = tempfile.TemporaryDirectory()
    directory = Path(workspace.name)

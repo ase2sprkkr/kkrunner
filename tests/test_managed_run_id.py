@@ -1,4 +1,5 @@
-from kkrunner import ExecutionSpec, LaunchSpec
+from kkrunner import ExecutionSpec
+from kkrunner.runs import LaunchSpec
 from kkrunner.remote.executor import RemoteEndpointExecutor
 
 

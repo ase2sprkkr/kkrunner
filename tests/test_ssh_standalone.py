@@ -7,7 +7,9 @@ from threading import Event
 
 import pytest
 
-from kkrunner import ExecutionSpec, LaunchSpec, RemoteEndpointExecutor, RunState, RunStore, SshTransport
+from kkrunner import ExecutionSpec, RunState, RunStore
+from kkrunner.runs import LaunchSpec
+from kkrunner.remote import RemoteEndpointExecutor, SshTransport
 from kkrunner.runs.manager import RunManager
 
 pytestmark = pytest.mark.skipif(

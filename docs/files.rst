@@ -27,7 +27,8 @@ for a file elsewhere.
    import sys
    import tempfile
    from pathlib import Path
-   from kkrunner import ExecutionSpec, FileManifest, TaskFile
+   from kkrunner import ExecutionSpec, TaskFile
+   from kkrunner.files import FileManifest
 
    workspace = tempfile.TemporaryDirectory()
    directory = Path(workspace.name)
@@ -82,23 +83,23 @@ Two active runs may read the same file. A write conflicts with another run's
 read or write. Cache declarations participate in both roles. Local uploads,
 download destinations and streamed output paths are checked independently of
 the backend. Remote paths are also checked in their target filesystem namespace.
-A :class:`~kkrunner.DuplicateSubmissionError` reports an active conflict.
+A :class:`~kkrunner.runs.DuplicateSubmissionError` reports an active conflict.
 
 For host aliases or shared mounts, supply the same ``filesystem_id`` to
-:class:`~kkrunner.RemoteEndpointExecutor`. KKRunner does not infer shared mounts
+:class:`~kkrunner.remote.RemoteEndpointExecutor`. KKRunner does not infer shared mounts
 from different hostnames. Distinct IDs declare distinct target filesystems.
 
 Transfers and captured contents
 ---------------------------------
 
-:class:`~kkrunner.LaunchSpec` provides the local/remote roots and transfer
+:class:`~kkrunner.runs.LaunchSpec` provides the local/remote roots and transfer
 policies. ``changed`` transfers differing contents; ``always`` transfers every
 existing source; ``missing`` fills only missing destinations; ``never`` disables
 that transfer direction. Missing required inputs remain errors.
 
 Successful durable completion captures file versions and SHA-256 digests.
 Historical applications should verify captured files before interpreting them.
-:class:`~kkrunner.HistoricalFileMismatchError` indicates that historical content
+:class:`~kkrunner.runs.HistoricalFileMismatchError` indicates that historical content
 was replaced. A missing required local output is an ``ARTIFACTS`` failure;
 a failed remote transfer is a ``DOWNLOAD`` failure. Optional missing outputs
 are recorded as skipped.

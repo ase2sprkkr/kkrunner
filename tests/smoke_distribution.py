@@ -9,17 +9,11 @@ import tempfile
 from pathlib import Path
 
 import kkrunner
-from kkrunner import (
-    ExecutionSpec,
-    LaunchSpec,
-    LocalExecutor,
-    LocalTransport,
-    ProcessingPending,
-    ProjectExecutionManager,
-    ProjectRepository,
-    RemoteEndpointExecutor,
-    RunState,
-)
+from kkrunner import ExecutionSpec, ProcessingPending, RunState
+from kkrunner.runs import LaunchSpec
+from kkrunner.backends import LocalExecutor
+from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
+from kkrunner.projects import ProjectExecutionManager, ProjectRepository
 
 assert not os.environ.get("PYTHONPATH")
 assert importlib.util.find_spec("ase") is None

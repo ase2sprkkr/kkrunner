@@ -2,17 +2,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from kkrunner import (
-    Execution,
-    ExecutorEndpoint,
-    FailurePhase,
-    FileEntry,
-    FileManifest,
-    LocalExecutor,
-    RunRecord,
-    RunState,
-    WorkingDirectory,
-)
+from kkrunner.runs import Execution, FailurePhase, RunRecord, WorkingDirectory
+from kkrunner.backends import ExecutorEndpoint, LocalExecutor
+from kkrunner.files import FileEntry, FileManifest
+from kkrunner import RunState
 from kkrunner.backends import local_managed as local_project
 from kkrunner.remote import service as remote_service
 

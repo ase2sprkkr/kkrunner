@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from kkrunner import Executor, ProjectExecutionManager, ProjectRepository, RunState
+from kkrunner.runs import Executor
+from kkrunner.projects import ProjectExecutionManager, ProjectRepository
+from kkrunner import RunState
 
 
 class _Runner:

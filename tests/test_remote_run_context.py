@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from kkrunner import Executor, LaunchSpec
+from kkrunner.runs import Executor, LaunchSpec
 from kkrunner.remote.executor import RemoteEndpointExecutor
 
 

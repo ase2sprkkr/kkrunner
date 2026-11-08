@@ -1,6 +1,9 @@
 import asyncio
 
-from kkrunner import ExecutionSpec, FileManifest, LaunchSpec, LocalTransport, MpiSpec, RemoteEndpointExecutor
+from kkrunner import ExecutionSpec
+from kkrunner.files import FileManifest
+from kkrunner.runs import LaunchSpec, MpiSpec
+from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
 
 
 def test_remote_request_carries_target_executor_options(tmp_path):

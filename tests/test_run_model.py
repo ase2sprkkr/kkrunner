@@ -230,7 +230,7 @@ def test_legacy_duplicate_stderr_declaration_is_updated_together():
 
 
 def test_public_availability_enum_is_the_manifest_enum():
-    from kkrunner import ArtifactAvailabilityState
+    from kkrunner.files import ArtifactAvailabilityState
     from kkrunner.files.manifest import ArtifactAvailabilityState as ModelState
 
     assert ModelState is ArtifactAvailabilityState

@@ -17,7 +17,8 @@ Use `python -m pip install --editable .` instead when editing the source.
 
 ```python
 import sys
-from kkrunner import ExecutionSpec, LocalExecutor
+from kkrunner import ExecutionSpec
+from kkrunner.backends import LocalExecutor
 
 run = LocalExecutor().create_run(ExecutionSpec([sys.executable, '-c', 'print(42)']))
 outcome = run.run()
@@ -32,7 +33,8 @@ Projects are optional; see the [project guide](docs/projects.rst) for grouping.
 ```python
 import sys
 from pathlib import Path
-from kkrunner import ExecutionSpec, LocalExecutor, RunManager, RunStore
+from kkrunner import ExecutionSpec, RunManager, RunStore
+from kkrunner.backends import LocalExecutor
 
 root = Path('example').absolute()
 root.mkdir(exist_ok=True)

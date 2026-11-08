@@ -1,8 +1,8 @@
 Group runs in projects
 ========================
 
-Projects are optional. :class:`~kkrunner.ProjectRepository` stores project names,
-hierarchy and working directories. :class:`~kkrunner.ProjectExecutionManager`
+Projects are optional. :class:`~kkrunner.projects.ProjectRepository` stores project names,
+hierarchy and working directories. :class:`~kkrunner.projects.ProjectExecutionManager`
 associates runs with a selected project and uses the same persistence and
 reservations as :class:`~kkrunner.RunManager`. Project definitions and run
 records have separate stores.
@@ -12,10 +12,9 @@ records have separate stores.
    import sys
    import tempfile
    from pathlib import Path
-   from kkrunner import (
-       ExecutionSpec, LocalExecutor, ProjectExecutionManager,
-       ProjectRepository, RunStore,
-   )
+   from kkrunner import ExecutionSpec, RunStore
+   from kkrunner.backends import LocalExecutor
+   from kkrunner.projects import ProjectExecutionManager, ProjectRepository
 
    workspace = tempfile.TemporaryDirectory()
    directory = Path(workspace.name)
@@ -49,9 +48,9 @@ prevent conflicting runs in different projects.
 
 Project snapshots are immutable. ``project.modify(...)`` returns an edited
 snapshot; persist it using ``repository.save(..., expected_generation=...)``.
-Stale generations raise :class:`~kkrunner.ProjectConflictError`. Deleting a root,
+Stale generations raise :class:`~kkrunner.projects.ProjectConflictError`. Deleting a root,
 a project with children, or a project with active runs raises
-:class:`~kkrunner.ProjectDeleteError`. Subscribers receive repository changes
+:class:`~kkrunner.projects.ProjectDeleteError`. Subscribers receive repository changes
 through ``refresh()``; on-disk files remain authoritative.
 
 For application integration, retain the application's existing project repository

@@ -4,7 +4,8 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from kkrunner import ExecutionSpec, PsijExecutor, RunState, RunStore
+from kkrunner import ExecutionSpec, RunState, RunStore
+from kkrunner.backends import PsijExecutor
 from kkrunner.runs.manager import RunManager
 
 

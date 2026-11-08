@@ -6,19 +6,11 @@ from threading import Event, Thread
 
 import pytest
 
-from kkrunner import (
-    CorruptRunRecord,
-    ExecutionOutcome,
-    ExecutionResources,
-    ExecutionSpec,
-    Executor,
-    ExecutorEndpoint,
-    FileEntry,
-    FileManifest,
-    ResourceOwnedRunner,
-    RunState,
-    RunStore,
-)
+from kkrunner.runs import CorruptRunRecord, Executor
+from kkrunner import ExecutionOutcome, ExecutionSpec, RunState, RunStore
+from kkrunner.runs.base import ExecutionResources, ResourceOwnedRunner
+from kkrunner.backends import ExecutorEndpoint
+from kkrunner.files import FileEntry, FileManifest
 from kkrunner.runs.conflicts import submission_conflicts
 from kkrunner.runs.manager import RunManager
 from kkrunner.runs.processing import PostprocessingRunner
@@ -170,7 +162,7 @@ def test_stdin_is_part_of_read_manifest(tmp_path):
 
 
 def test_remote_preflight_streams_close_on_submit_failure(tmp_path, monkeypatch):
-    from kkrunner import LocalTransport, RemoteEndpointExecutor
+    from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
     from kkrunner.remote.executor import _RemoteRun
 
     executor = RemoteEndpointExecutor(LocalTransport())

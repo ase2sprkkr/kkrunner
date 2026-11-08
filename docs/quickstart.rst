@@ -2,7 +2,7 @@ Run a program
 ===============
 
 An :class:`~kkrunner.ExecutionSpec` describes a command and its files.
-An :class:`~kkrunner.Executor` creates a runner; ``run()`` submits and waits,
+An :class:`~kkrunner.runs.Executor` creates a runner; ``run()`` submits and waits,
 while ``submit()`` followed by ``wait()`` separates those steps.
 Commands are argument sequences, so shell expansion is not performed.
 
@@ -11,7 +11,8 @@ Commands are argument sequences, so shell expansion is not performed.
    import sys
    import tempfile
    from pathlib import Path
-   from kkrunner import ExecutionSpec, LocalExecutor
+   from kkrunner import ExecutionSpec
+   from kkrunner.backends import LocalExecutor
 
    workspace = tempfile.TemporaryDirectory()
    directory = Path(workspace.name)
@@ -45,8 +46,8 @@ outputs must exist after a successful command; declare optional outputs with
 
 ``create_run()`` alone does not submit the program. Output paths are opened at
 submission. Supplied streams remain the caller's responsibility unless ownership
-is explicitly transferred with :class:`~kkrunner.ExecutionResources` and
-:class:`~kkrunner.ResourceOwnedRunner`.
+is explicitly transferred with :class:`~kkrunner.runs.base.ExecutionResources` and
+:class:`~kkrunner.runs.base.ResourceOwnedRunner`.
 
 For progress notifications, register ``runner.add_output_listener(callback)``
 before submission. The callback receives ``(text, kind)``, where ``kind`` is

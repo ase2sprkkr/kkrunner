@@ -3,16 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from kkrunner import (
-    DuplicateSubmissionError,
-    ExecutionOutcome,
-    Executor,
-    ExecutorPool,
-    FailurePhase,
-    RunState,
-    RunStatus,
-    RunStore,
-)
+from kkrunner.runs import DuplicateSubmissionError, Executor, FailurePhase, RunStatus
+from kkrunner import ExecutionOutcome, RunState, RunStore
+from kkrunner.backends import ExecutorPool
 from kkrunner.runs.manager import RunManager
 
 

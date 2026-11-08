@@ -3,16 +3,10 @@ from dataclasses import replace
 
 import pytest
 
-from kkrunner import (
-    CorruptRunRecord,
-    Execution,
-    ExecutorEndpoint,
-    FileManifest,
-    RunRecord,
-    RunState,
-    RunStore,
-    WorkingDirectory,
-)
+from kkrunner.runs import CorruptRunRecord, Execution, RunRecord, WorkingDirectory
+from kkrunner.backends import ExecutorEndpoint
+from kkrunner.files import FileManifest
+from kkrunner import RunState, RunStore
 
 
 @pytest.mark.parametrize("schema_version", [0, 2, 3, 4, 5])

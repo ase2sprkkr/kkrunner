@@ -2,7 +2,10 @@
 
 import sys
 
-from kkrunner import ExecutionSpec, LaunchSpec, LocalExecutor, LocalTransport, RemoteEndpointExecutor
+from kkrunner import ExecutionSpec
+from kkrunner.runs import LaunchSpec
+from kkrunner.backends import LocalExecutor
+from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
 
 
 def test_raw_local_paths_and_stdin_are_materialized_at_submission(tmp_path):

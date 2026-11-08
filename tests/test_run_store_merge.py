@@ -1,4 +1,5 @@
-from kkrunner import ExecutorEndpoint, RunState, RunStore
+from kkrunner.backends import ExecutorEndpoint
+from kkrunner import RunState, RunStore
 from kkrunner.runs.manager import RunManager
 
 
@@ -44,7 +45,7 @@ def test_late_conflicting_final_state_does_not_replace_known_final_outcome(tmp_p
 
 
 def test_late_uncaptured_manifest_cannot_destroy_historical_snapshot(tmp_path):
-    from kkrunner import FileEntry, FileManifest
+    from kkrunner.files import FileEntry, FileManifest
 
     manager = RunManager(RunStore(tmp_path / "runs"))
     output = tmp_path / "out"

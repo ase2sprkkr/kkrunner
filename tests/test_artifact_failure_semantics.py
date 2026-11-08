@@ -2,7 +2,9 @@
 
 import pytest
 
-from kkrunner import ArtifactAvailabilityState, FailurePhase, FileEntry, FileManifest, RunState, RunStore
+from kkrunner.files import ArtifactAvailabilityState, FileEntry, FileManifest
+from kkrunner.runs import FailurePhase
+from kkrunner import RunState, RunStore
 from kkrunner.runs.manager import RunManager
 
 

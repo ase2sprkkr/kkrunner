@@ -1,6 +1,8 @@
 import pytest
 
-from kkrunner import FileEntry, FileManifest, RunState, RunStatus, RunStore
+from kkrunner.files import FileEntry, FileManifest
+from kkrunner import RunState, RunStore
+from kkrunner.runs import RunStatus
 from kkrunner.runs.manager import RunManager
 
 
@@ -36,7 +38,8 @@ def test_refresh_acknowledges_terminal_receipt_after_commit(tmp_path, monkeypatc
 def test_completion_callback_can_read_its_own_finished_result(tmp_path):
     from threading import Event
 
-    from kkrunner import ExecutionSpec, LocalExecutor
+    from kkrunner import ExecutionSpec
+    from kkrunner.backends import LocalExecutor
 
     ended, results = Event(), []
     run = None
@@ -73,7 +76,7 @@ def test_failed_ack_is_reconciled_without_changing_terminal_outcome(tmp_path, mo
 
 
 def test_failed_artifact_observation_prevents_processing_success(tmp_path):
-    from kkrunner import ArtifactAvailabilityState
+    from kkrunner.files import ArtifactAvailabilityState
 
     # A callback cannot publish FINISHED after a concurrent artifact failure.
     manager = RunManager(RunStore(tmp_path / "runs"))
@@ -94,7 +97,7 @@ def test_failed_artifact_observation_prevents_processing_success(tmp_path):
 
 
 def test_download_retry_retains_backend_receipt_until_success(tmp_path, monkeypatch):
-    from kkrunner import FailurePhase
+    from kkrunner.runs import FailurePhase
 
     manager = RunManager(RunStore(tmp_path / "runs"))
     acknowledgements = []

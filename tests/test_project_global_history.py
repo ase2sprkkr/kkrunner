@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from kkrunner import FileEntry, FileManifest
+from kkrunner.files import FileEntry, FileManifest
 from kkrunner.projects.manager import ProjectExecutionManager
 from kkrunner.projects.repository import ProjectDeleteError, ProjectRepository
 from kkrunner.runs.base import RunState

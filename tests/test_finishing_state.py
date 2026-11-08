@@ -1,16 +1,10 @@
 from threading import Event
 from types import SimpleNamespace
 
-from kkrunner import (
-    ExecutionOutcome,
-    Executor,
-    ExecutorPool,
-    FailurePhase,
-    PostprocessingRunner,
-    RunState,
-    RunStatus,
-    RunStore,
-)
+from kkrunner import ExecutionOutcome, RunState, RunStore
+from kkrunner.runs import Executor, FailurePhase, RunStatus
+from kkrunner.backends import ExecutorPool
+from kkrunner.runs.processing import PostprocessingRunner
 from kkrunner.runs.manager import RunManager
 
 

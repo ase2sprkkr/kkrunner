@@ -6,17 +6,10 @@ from dataclasses import replace
 
 import pytest
 
-from kkrunner import (
-    Execution,
-    ExecutionSpec,
-    ExecutorEndpoint,
-    FileEntry,
-    FileManifest,
-    LocalExecutor,
-    RunRecord,
-    RunState,
-    WorkingDirectory,
-)
+from kkrunner.runs import Execution, RunRecord, WorkingDirectory
+from kkrunner import ExecutionSpec, RunState
+from kkrunner.backends import ExecutorEndpoint, LocalExecutor
+from kkrunner.files import FileEntry, FileManifest
 from kkrunner.backends.local_managed import local_manifest
 from kkrunner.remote.service import (
     _decode_handle,
@@ -188,7 +181,7 @@ def test_terminal_without_ticket_is_still_accessible_by_handle(tmp_path):
 
 
 def test_local_prelaunch_error_is_known_submission_failure(tmp_path, monkeypatch):
-    from kkrunner import FailurePhase
+    from kkrunner.runs import FailurePhase
     from kkrunner.remote import service as remote_service
     from kkrunner.runs.base import SubmissionNotStarted
 
@@ -276,7 +269,7 @@ def test_submission_cleanup_uses_parsed_manifest_and_protects_caches(tmp_path):
 
 
 def test_local_project_request_uses_common_command_fields(tmp_path):
-    from kkrunner import LaunchSpec
+    from kkrunner.runs import LaunchSpec
     from kkrunner.remote.service import _request_spec
 
     spec = replace(
@@ -331,7 +324,8 @@ def test_new_client_process_reopens_store_and_reconnects_to_running_calculation(
     submit = """
 import os, sys
 from pathlib import Path
-from kkrunner import ExecutionSpec, LocalExecutor, RunManager, RunStore
+from kkrunner import ExecutionSpec, RunManager, RunStore
+from kkrunner.backends import LocalExecutor
 root = Path(sys.argv[1])
 manager = RunManager(RunStore(root / 'runs'))
 command = '''

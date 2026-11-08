@@ -27,7 +27,7 @@ accepts a scheduler executor:
 
 .. code-block:: python
 
-   from kkrunner import PsijExecutor
+   from kkrunner.backends import PsijExecutor
 
    executor = PsijExecutor(backend="slurm")
    # manager and spec are created as in the persistent-run example.
@@ -41,8 +41,8 @@ a run: downloads and application processing may continue after that job exits.
 Endpoint identity and reuse
 -----------------------------
 
-:class:`~kkrunner.ExecutorEndpoint` contains backend and connection identity.
-It is serializable and hashable; :class:`~kkrunner.ExecutorPool` reuses instances
+:class:`~kkrunner.backends.ExecutorEndpoint` contains backend and connection identity.
+It is serializable and hashable; :class:`~kkrunner.backends.ExecutorPool` reuses instances
 for identical endpoints and can reconstruct them after restart. Per-run launch
 policy belongs in ``LaunchSpec`` and must not split the executor's identity.
 Close explicitly owned pools when their application scope ends.
@@ -103,11 +103,11 @@ MPI
 
 .. code-block:: python
 
-   from kkrunner import LaunchSpec, MpiSpec
+   from kkrunner.runs import LaunchSpec, MpiSpec
 
    launch = LaunchSpec(mpi=MpiSpec(required=True, process_count=4))
 
 The launcher is resolved on the execution host. Explicit required MPI cannot
 fall back to serial execution. Autodetection may allow serial fallback and emit
-:class:`~kkrunner.MpiNotFoundWarning`; select that policy deliberately. KKRunner
+:class:`~kkrunner.runs.MpiNotFoundWarning`; select that policy deliberately. KKRunner
 does not supply MPI libraries or repair a binary's runtime linkage.

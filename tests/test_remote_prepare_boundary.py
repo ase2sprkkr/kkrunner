@@ -2,17 +2,10 @@
 
 import pytest
 
-from kkrunner import (
-    ExecutionSpec,
-    FileEntry,
-    FileManifest,
-    FileMapping,
-    LaunchSpec,
-    LocalTransport,
-    RemoteEndpointExecutor,
-    RunState,
-    RunStore,
-)
+from kkrunner import ExecutionSpec, RunState, RunStore
+from kkrunner.files import FileEntry, FileManifest, FileMapping
+from kkrunner.runs import LaunchSpec
+from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
 from kkrunner.remote.executor import _RemoteRun
 from kkrunner.runs.manager import RunManager
 

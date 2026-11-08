@@ -1,5 +1,5 @@
 import kkrunner.remote.runner as remote_module
-from kkrunner import RemoteEndpointExecutor
+from kkrunner.remote import RemoteEndpointExecutor
 
 
 def test_public_remote_executor_is_endpoint_only():

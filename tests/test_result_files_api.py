@@ -1,6 +1,7 @@
 """Public terminology and capabilities for persistent result files."""
 
-from kkrunner import Executor, FileManifest, FileState
+from kkrunner.runs import Executor
+from kkrunner.files import FileManifest, FileState
 
 
 def test_result_file_names_use_canonical_public_api():

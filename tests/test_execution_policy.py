@@ -243,7 +243,8 @@ def test_strict_runner_path_errors_remain_backend_specific(tmp_path):
 
 
 def test_common_command_request_preserves_mpi_and_launch_contract(tmp_path):
-    from kkrunner import ExecutionSpec, LaunchSpec
+    from kkrunner import ExecutionSpec
+    from kkrunner.runs import LaunchSpec
 
     spec = ExecutionSpec(
         argv=("serial", "input.inp"),

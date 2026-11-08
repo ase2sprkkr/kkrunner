@@ -2,7 +2,8 @@ import asyncio
 
 import pytest
 
-from kkrunner import ExecutionSpec, FileEntry, FileManifest, RunState
+from kkrunner import ExecutionSpec, RunState
+from kkrunner.files import FileEntry, FileManifest
 from kkrunner.files.manifest import FileSyncPolicy
 from kkrunner.remote.runner import RemoteRunner
 

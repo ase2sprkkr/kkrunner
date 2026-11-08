@@ -148,10 +148,20 @@ clock change that reverses entirely between sampled reads can evade detection.
 | `kkrunner.files` | TaskFile, manifests, transfer policy, pathname declarations, captured versions and artifact availability. |
 | `kkrunner.support` | Shared durability, locking, asynchronous and growing-stream utilities. |
 
-The root package exports the principal types from their defining modules;
-it does not implement a second API or provide compatibility classes. Imports
-inside the implementation use their defining modules. The former flat module
-paths are removed. The remote worker starts as `kkrunner.remote.worker`.
+The root package exports seven backend-independent entry points:
+`ExecutionSpec`, `ExecutionOutcome`, `RunManager`, `RunStore`, `RunState`,
+`TaskFile` and `ProcessingPending`. Select concrete executors from
+`kkrunner.backends` or `kkrunner.remote`; projects and advanced file/run types
+are exported by their respective subpackages. Runner implementations and
+resource ownership helpers stay in their defining modules for backend authors.
+
+The public facades re-export the original objects without compatibility classes
+or alternate names. Internal imports use defining modules. Backend implementations
+are loaded only when requested from `kkrunner.backends`: run contracts depend on
+endpoint metadata, so loading implementations while initializing that package
+would reverse the dependency and create an import cycle. The root import does
+not load local/PSI/J implementations, projects or the remote client/service.
+The remote worker starts as `kkrunner.remote.worker`.
 
 `files` and `support` do not import the run lifecycle, projects, backends or
 remote service. File reservations use generic local path expansion without

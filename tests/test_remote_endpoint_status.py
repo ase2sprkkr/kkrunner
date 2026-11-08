@@ -2,15 +2,9 @@ from dataclasses import replace
 
 import pytest
 
-from kkrunner import (
-    Execution,
-    FailurePhase,
-    FileEntry,
-    FileManifest,
-    RunRecord,
-    RunState,
-    WorkingDirectory,
-)
+from kkrunner.runs import Execution, FailurePhase, RunRecord, WorkingDirectory
+from kkrunner.files import FileEntry, FileManifest
+from kkrunner import RunState
 from kkrunner.backends.endpoint import endpoint_for_executor
 from kkrunner.remote.executor import RemoteEndpointExecutor
 

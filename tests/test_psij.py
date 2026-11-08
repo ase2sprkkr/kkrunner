@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from kkrunner import Execution, ExecutorEndpoint, FileEntry, FileManifest, RunRecord, WorkingDirectory
+from kkrunner.runs import Execution, RunRecord, WorkingDirectory
+from kkrunner.backends import ExecutorEndpoint
+from kkrunner.files import FileEntry, FileManifest
 from kkrunner.backends import psij as psij_backend
 from kkrunner.runs.base import ExecutionSpec, LaunchSpec, RunState
 

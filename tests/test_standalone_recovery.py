@@ -9,16 +9,10 @@ from threading import Event, Thread
 
 import pytest
 
-from kkrunner import (
-    CorruptRunRecord,
-    ExecutionOutcome,
-    ExecutionSpec,
-    FileEntry,
-    FileManifest,
-    LocalExecutor,
-    RunState,
-    RunStore,
-)
+from kkrunner.runs import CorruptRunRecord
+from kkrunner import ExecutionOutcome, ExecutionSpec, RunState, RunStore
+from kkrunner.files import FileEntry, FileManifest
+from kkrunner.backends import LocalExecutor
 from kkrunner.runs.manager import RunManager
 from kkrunner.runs.processing import ProcessingPending
 
@@ -192,7 +186,7 @@ def test_local_observation_detaches_without_stopping_backend(tmp_path, monkeypat
 
 
 def test_refresh_captures_artifacts_without_result_processor(tmp_path):
-    from kkrunner import RunStatus
+    from kkrunner.runs import RunStatus
 
     manager = RunManager(RunStore(tmp_path / "runs"))
     output = tmp_path / "stdout.txt"
@@ -232,7 +226,8 @@ def test_current_schema_rejects_invalid_field_types(tmp_path, field, value):
 
 
 def test_failed_download_can_reattach_to_preserved_backend_receipt(tmp_path, monkeypatch):
-    from kkrunner import FailurePhase, LaunchSpec, LocalTransport, RemoteEndpointExecutor
+    from kkrunner.runs import FailurePhase, LaunchSpec
+    from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     local, remote = tmp_path / "local", tmp_path / "remote"

@@ -13,16 +13,16 @@ processing needed to obtain its result. A scheduler **job** is the execution
 part of that run. The backend process may have finished while the run is still
 downloading files or processing results.
 
-:class:`~kkrunner.RunStore` stores durable :class:`~kkrunner.RunRecord` objects
+:class:`~kkrunner.RunStore` stores durable :class:`~kkrunner.runs.RunRecord` objects
 in a directory. Each record contains a stable run ID, backend identity, file
 manifest and lifecycle state. :class:`~kkrunner.RunManager` creates managed
-runs backed by that store and returns a :class:`~kkrunner.PersistentRunner`.
+runs backed by that store and returns a :class:`~kkrunner.runs.PersistentRunner`.
 Use ``manager.create_run(executor, spec)`` and ``run.submit()`` to start one.
 After restarting the client, reopen the same store and call
 ``manager.attach(run_id)`` to continue a nonterminal run.
 
 Projects optionally group these runs by name and working directory.
-:class:`~kkrunner.ProjectExecutionManager` adds project membership to the same
+:class:`~kkrunner.projects.ProjectExecutionManager` adds project membership to the same
 lifecycle; persistence does not require a project. See :doc:`projects`.
 
 Result processing
@@ -43,9 +43,8 @@ its missing result processor. The command is not submitted again:
    import sys
    import tempfile
    from pathlib import Path
-   from kkrunner import (
-       ExecutionSpec, LocalExecutor, ProcessingPending, RunManager, RunStore,
-   )
+   from kkrunner import ExecutionSpec, ProcessingPending, RunManager, RunStore
+   from kkrunner.backends import LocalExecutor
 
    workspace = tempfile.TemporaryDirectory()
    directory = Path(workspace.name)
@@ -123,7 +122,7 @@ Store and metadata contracts
 ``RunStore.save`` creates a globally unique ID or repeats an identical save.
 Use its atomic update API for subsequent changes. A date shard does not create
 a separate ID namespace. Invalid or duplicate records raise
-:class:`~kkrunner.CorruptRunRecord`; they are not silently ignored.
+:class:`~kkrunner.runs.CorruptRunRecord`; they are not silently ignored.
 
 Metadata is namespaced JSON data, recursively immutable after record creation.
 It cannot change run identity, choose parsers, or execute code. Put the

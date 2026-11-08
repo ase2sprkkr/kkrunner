@@ -1,57 +1,66 @@
 API reference
 ===============
 
-The root package exports these principal types from their defining modules.
-Use :class:`~kkrunner.RunManager` for project-free persistence and
-:class:`~kkrunner.ProjectExecutionManager` for project-bound runs.
-Backend jobs report execution facts; the managed run owns end-to-end completion.
+The root package provides backend-independent entry points for ordinary runs.
+Choose executors from :mod:`kkrunner.backends` or :mod:`kkrunner.remote`; projects,
+file manifests and advanced run contracts have their own public subpackages.
+These import paths are independent of the modules implementing each type.
+
+Common entry points
+----------------------
 
 .. py:module:: kkrunner
 
 .. currentmodule:: kkrunner
-
-Execution contracts
----------------------
 
 .. autosummary::
    :toctree: _generated
 
    ExecutionSpec
    ExecutionOutcome
+   RunManager
+   RunStore
+   RunState
+   TaskFile
+   ProcessingPending
+
+Execution contracts and durable records
+-----------------------------------------
+
+.. py:module:: kkrunner.runs
+
+.. currentmodule:: kkrunner.runs
+
+.. autosummary::
+   :toctree: _generated
+
    LaunchSpec
    MpiSpec
    MpiNotFoundWarning
-   RunState
    RunStatus
    FailurePhase
    Runner
    BackendRunner
    ManagedRunner
    Executor
-
-Durable runs and processing
------------------------------
-
-.. autosummary::
-   :toctree: _generated
-
-   RunManager
    PersistentRunner
    RunRecord
-   RunStore
    CorruptRunRecord
    DuplicateSubmissionError
    HistoricalFileMismatchError
-   PostprocessingRunner
-   ProcessingPending
+   Execution
+   WorkingDirectory
 
 Declared files and identity
 -----------------------------
 
+.. py:module:: kkrunner.files
+
+.. currentmodule:: kkrunner.files
+
 .. autosummary::
    :toctree: _generated
 
-   TaskFile
    FileEntry
    CacheEntry
    FileMapping
@@ -63,21 +72,33 @@ Declared files and identity
    FileVersion
    FileVersionCaptureError
 
-Backends and transport
-------------------------
+Execution backends
+---------------------
+
+.. py:module:: kkrunner.backends
+
+.. currentmodule:: kkrunner.backends
 
 .. autosummary::
    :toctree: _generated
 
    LocalExecutor
-   LocalRunner
    PsijExecutor
-   PsijRunner
-   RemoteEndpointExecutor
-   RemoteRunner
    ExecutorEndpoint
    ExecutorPool
    default_executor_pool
+
+Remote execution and transport
+--------------------------------
+
+.. py:module:: kkrunner.remote
+
+.. currentmodule:: kkrunner.remote
+
+.. autosummary::
+   :toctree: _generated
+
+   RemoteEndpointExecutor
    Transport
    RunningCommand
    LocalTransport
@@ -85,6 +106,10 @@ Backends and transport
 
 Projects
 ----------
+
+.. py:module:: kkrunner.projects
+
+.. currentmodule:: kkrunner.projects
 
 .. autosummary::
    :toctree: _generated
@@ -97,13 +122,20 @@ Projects
    ProjectExecutionManager
    default_projects_directory
 
-Execution identity and resource ownership
--------------------------------------------
+Backend implementation interfaces
+------------------------------------
+
+These modules expose lower-level runner implementations and resource ownership
+helpers for backend authors. They are not re-exported by the public facades.
+
+.. currentmodule:: kkrunner
 
 .. autosummary::
    :toctree: _generated
 
-   Execution
-   WorkingDirectory
-   ExecutionResources
-   ResourceOwnedRunner
+   backends.local.LocalRunner
+   backends.psij.PsijRunner
+   remote.runner.RemoteRunner
+   runs.processing.PostprocessingRunner
+   runs.base.ExecutionResources
+   runs.base.ResourceOwnedRunner

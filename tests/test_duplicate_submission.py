@@ -3,7 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from kkrunner import DuplicateSubmissionError, Executor, FileEntry, FileManifest, RunState, RunStore
+from kkrunner.runs import DuplicateSubmissionError, Executor
+from kkrunner.files import FileEntry, FileManifest
+from kkrunner import RunState, RunStore
 from kkrunner.runs.manager import RunManager
 
 
@@ -239,7 +241,7 @@ def test_wildcard_output_collisions_follow_pattern_overlap(
 
 
 def test_remote_conflicts_use_declared_target_paths_before_staging(tmp_path):
-    from kkrunner import ExecutorEndpoint
+    from kkrunner.backends import ExecutorEndpoint
 
     manager = RunManager(RunStore(tmp_path / "runs"))
     endpoint = ExecutorEndpoint(executor="ssh", host="cluster")

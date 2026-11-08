@@ -2,7 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from kkrunner import FailurePhase, RunState
+from kkrunner.runs import FailurePhase
+from kkrunner import RunState
 from kkrunner.remote import mailbox as remote_mailbox
 
 

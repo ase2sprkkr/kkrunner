@@ -5,18 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from kkrunner import (
-    DuplicateSubmissionError,
-    ExecutionSpec,
-    ExecutorEndpoint,
-    FileEntry,
-    FileManifest,
-    LaunchSpec,
-    RemoteEndpointExecutor,
-    RunManager,
-    RunStore,
-    SshTransport,
-)
+from kkrunner.runs import DuplicateSubmissionError, LaunchSpec
+from kkrunner import ExecutionSpec, RunManager, RunStore
+from kkrunner.backends import ExecutorEndpoint
+from kkrunner.files import FileEntry, FileManifest
+from kkrunner.remote import RemoteEndpointExecutor, SshTransport
 from kkrunner.runs.conflicts import submission_conflicts
 
 
