@@ -1,8 +1,8 @@
 Installation
 ==============
 
-KKRunner supports Python 3.9 and newer. The core depends on ``platformdirs``;
-scheduler support and documentation tools are optional extras.
+KKRunner supports Python 3.9 and newer. The core depends on ``platformdirs`` and
+``psutil``; scheduler support and documentation tools are optional extras.
 
 For this development alpha, install from a KKRunner checkout or a supplied
 wheel. From the root of the checkout:
@@ -36,13 +36,18 @@ execution host. MPI execution needs a compatible MPI launcher there.
 Platforms
 -----------
 
-Managed local execution and the direct-process remote service currently require
-Linux: their process identity check reads ``/proc/<pid>/stat``. macOS has Unix
-sockets and process groups, but this identity check has not been ported there.
+Managed local execution and the direct-process remote service use POSIX process
+groups and Unix sockets. CI covers Linux and macOS, including durable local
+supervision and reconnect on Apple Silicon and Intel. Windows is not supported
+by this supervisor. Raw local execution has no restart guarantee; an SSH client
+needs the system ``ssh`` executable and a supported execution host.
 
-macOS CI covers installation, the CLI, raw local execution, transport and file/run
-models on Apple Silicon and Intel. It does not cover the durable local supervisor
-or a macOS execution target. Raw local execution has no restart guarantee; an
-SSH client can submit to a supported execution host and needs the system ``ssh``
-executable. A client does not need ASE or scientific parsers even when the
-application that submitted its runs uses them.
+Process identity uses the public ``psutil`` API. Linux creation times are
+normalized against boot time to withstand system-clock changes. Other platforms
+use the reported absolute creation time; clock adjustments and timestamp
+resolution can limit identity reliability. Unverifiable identities yield
+``UNKNOWN`` rather than assuming that a PID still belongs to the original run.
+See :doc:`architecture` for the identity checks and their limits.
+
+A client does not need ASE or scientific parsers even when the application that
+submitted its runs uses them.

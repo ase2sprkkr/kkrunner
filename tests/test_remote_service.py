@@ -13,8 +13,7 @@ def _process_handle(tmp_path):
     outcome = tmp_path / "remote-outcomes" / ("a" * 32 + ".json")
     handle = {
         "kind": "process",
-        "pid": 123,
-        "start_time": "456",
+        "identity": {"pid": 123, "start_time": 456, "time_basis": "linux-boot"},
         "receipt_id": "a" * 32,
         "socket_path": "/tmp/test-supervisor.sock",
     }
@@ -37,10 +36,10 @@ def test_remote_id_is_opaque_backend_handle_without_lifecycle_state(tmp_path):
     assert remote_id != str(handle)
     decoded = remote_service._decode_handle(remote_id)
     assert decoded["kind"] == "process"
-    assert decoded["pid"] == 123
+    assert decoded["identity"]["pid"] == 123
     assert "state" not in decoded
     assert "failure_phase" not in decoded
-    assert set(decoded) == {"kind", "pid", "start_time", "receipt_id", "socket_path"}
+    assert set(decoded) == {"kind", "identity", "receipt_id", "socket_path"}
 
 
 @pytest.mark.parametrize(
@@ -97,8 +96,18 @@ def test_malformed_remote_id_is_rejected_at_decode_boundary(payload):
 
 def test_remote_id_rejects_wrong_field_types():
     for handle in (
-        {"kind": "process", "pid": True, "start_time": "10", "receipt_id": "a" * 32, "socket_path": "/tmp/socket"},
-        {"kind": "process", "pid": 11, "start_time": "10", "receipt_id": "../bad", "socket_path": "/tmp/socket"},
+        {
+            "kind": "process",
+            "identity": {"pid": True, "start_time": 10, "time_basis": "linux-boot"},
+            "receipt_id": "a" * 32,
+            "socket_path": "/tmp/socket",
+        },
+        {
+            "kind": "process",
+            "identity": {"pid": 11, "start_time": 10, "time_basis": "linux-boot"},
+            "receipt_id": "../bad",
+            "socket_path": "/tmp/socket",
+        },
         {"kind": "psij", "backend": "", "native_id": "10", "url": None},
         {"kind": "psij", "backend": "slurm", "native_id": None, "url": None},
     ):
@@ -322,7 +331,12 @@ def test_uncertain_submit_uses_only_temporary_identity_ticket(tmp_path, monkeypa
     monkeypatch.setenv("KKRunner_REMOTE_STATE_DIR", str(tmp_path))
     run_id = uuid4().hex
     handle = remote_service._encode_handle(
-        {"kind": "process", "pid": 123, "start_time": "456", "receipt_id": "a" * 32, "socket_path": "/tmp/fake-socket"}
+        {
+            "kind": "process",
+            "identity": {"pid": 123, "start_time": 456, "time_basis": "linux-boot"},
+            "receipt_id": "a" * 32,
+            "socket_path": "/tmp/fake-socket",
+        }
     )
     reply = {"remote_id": handle, "directory": str(tmp_path), "state": "running"}
     remote_service._publish_submission(run_id, reply)
@@ -362,8 +376,7 @@ def test_direct_follow_uses_shared_socket_protocol(tmp_path, monkeypatch):
             {
                 "kind": "process",
                 "socket_path": socket_path,
-                "pid": os.getpid(),
-                "start_time": "0",
+                "identity": remote_service.ProcessIdentity.read(os.getpid()).to_dict(),
                 "receipt_id": "a" * 32,
             }
         )
@@ -408,8 +421,7 @@ def test_direct_follow_without_stream_files_is_live_only(tmp_path, monkeypatch):
             {
                 "kind": "process",
                 "socket_path": socket_path,
-                "pid": os.getpid(),
-                "start_time": "0",
+                "identity": remote_service.ProcessIdentity.read(os.getpid()).to_dict(),
                 "receipt_id": "b" * 32,
             }
         )
@@ -496,7 +508,7 @@ def test_scheduler_request_protects_remote_cache_wildcards(tmp_path):
     assert "case.inp" in spec.input_files
 
 
-@pytest.mark.skipif(__import__("sys").platform != "linux", reason="PID identity needs Linux /proc")
+@pytest.mark.skipif(__import__("os").name != "posix", reason="Supervisor needs POSIX process groups and Unix sockets")
 def test_failed_submission_ticket_cannot_leave_calculation_running(tmp_path, monkeypatch):
     """A ticket write failure happens while the worker is still blocked."""
     from kkrunner.runs.base import SubmissionNotStarted
@@ -782,3 +794,31 @@ def test_remote_submit_json_setup_failure_cleans_pipes_and_directory(tmp_path, m
     for fd in created:
         with pytest.raises(OSError):
             os.fstat(fd)
+
+
+def test_legacy_tick_identity_is_not_reinterpreted_as_seconds():
+    handle = {
+        "kind": "process",
+        "pid": 42,
+        "start_time": "123456",
+        "receipt_id": "a" * 32,
+        "socket_path": "/missing/socket",
+    }
+    with pytest.raises(ValueError, match="Invalid remote execution id"):
+        remote_service._decode_handle(remote_service._encode_handle(handle))
+
+
+def test_unverifiable_identity_prevents_releasing_calculation(tmp_path, monkeypatch):
+    from kkrunner.runs.base import SubmissionNotStarted
+
+    monkeypatch.setattr(remote_service.ProcessIdentity, "read", classmethod(lambda cls, pid: None))
+    marker = tmp_path / "must-not-run"
+    with pytest.raises(SubmissionNotStarted, match="Unable to verify"):
+        remote_service.submit_remote(
+            {
+                "directory": str(tmp_path),
+                "argv": [__import__("sys").executable, "-c", "from pathlib import Path; Path('must-not-run').touch()"],
+                "detached": True,
+            }
+        )
+    assert not marker.exists()

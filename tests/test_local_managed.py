@@ -30,7 +30,7 @@ from kkrunner.runs.base import FailurePhase, RunStatus
 
 RUN_ID = "b" * 32
 pytestmark = pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="The shared supervisor uses Linux /proc process identity"
+    __import__("os").name != "posix", reason="The shared supervisor requires POSIX process groups and Unix sockets"
 )
 
 
@@ -74,7 +74,9 @@ def test_project_launch_reconnect_and_shared_ticket(tmp_path):
     assert _recover_submission(RUN_ID) == {"remote_id": handle}
     assert runner.wait().return_code == 0
     assert runner.state == RunState.FINISHED
-    assert not _process_running({**_decode_handle(handle), "start_time": "0"})
+    assert not _process_running(
+        {**_decode_handle(handle), "identity": {"pid": 1, "start_time": 0, "time_basis": "epoch"}}
+    )
     assert (tmp_path / "out.txt").read_text() == "output\n"
     assert executor.status(_record(tmp_path, handle))[0].state == RunState.FINISHED
     assert executor.recover_submission(RUN_ID, _record(tmp_path, None)).backend_id == handle
@@ -130,7 +132,12 @@ def test_missing_ticket_keeps_submission_uncertain(tmp_path):
 
 def test_missing_supervisor_outcome_is_unknown(tmp_path):
     handle = _encode_handle(
-        {"kind": "process", "pid": 9999999, "start_time": "0", "receipt_id": "a" * 32, "socket_path": "/missing/socket"}
+        {
+            "kind": "process",
+            "identity": {"pid": 9999999, "start_time": 0, "time_basis": "linux-boot"},
+            "receipt_id": "a" * 32,
+            "socket_path": "/missing/socket",
+        }
     )
     assert LocalExecutor().status(_record(tmp_path, handle))[0].state == RunState.UNKNOWN
 
@@ -316,3 +323,54 @@ def test_local_project_invalid_output_is_known_non_submission(tmp_path):
     assert existing.read_text() == "restart cache"
     assert extra.read_text() == "old output"
     assert _recover_submission(RUN_ID) is None
+
+
+def test_new_client_process_reopens_store_and_reconnects_to_running_calculation(tmp_path):
+    import subprocess
+
+    submit = """
+import os, sys
+from pathlib import Path
+from kkrunner import ExecutionSpec, LocalExecutor, RunManager, RunStore
+root = Path(sys.argv[1])
+manager = RunManager(RunStore(root / 'runs'))
+command = '''
+import time
+from pathlib import Path
+deadline = time.monotonic() + 20
+while not Path('resume').exists():
+    if time.monotonic() > deadline:
+        raise SystemExit(99)
+    time.sleep(0.01)
+print(42)
+'''
+run = manager.create_run(LocalExecutor(), ExecutionSpec(
+    [sys.executable, '-c', command], directory=root, output_file='run.out'))
+run.submit()
+print(run.id, flush=True)
+# Simulate abrupt client termination without running monitor cleanup.
+os._exit(0)
+"""
+    reconnect = """
+import sys
+from pathlib import Path
+from kkrunner import RunManager, RunState, RunStore
+root = Path(sys.argv[1])
+manager = RunManager(RunStore(root / 'runs'))
+record = manager.store.get(sys.argv[2])
+assert manager.refresh([record])[0].state == RunState.RUNNING
+run = manager.attach(record.id)
+(root / 'resume').touch()
+assert run.wait().return_code == 0
+assert manager.store.get(record.id).state == RunState.FINISHED
+assert (root / 'run.out').read_text() == '42\\n'
+"""
+    try:
+        submitted = subprocess.run(
+            [sys.executable, "-c", submit, str(tmp_path)], capture_output=True, text=True, check=True, timeout=10
+        )
+        run_id = submitted.stdout.strip()
+        assert len(run_id) == 32, submitted
+        subprocess.run([sys.executable, "-c", reconnect, str(tmp_path), run_id], check=True, timeout=25)
+    finally:
+        (tmp_path / "resume").touch()

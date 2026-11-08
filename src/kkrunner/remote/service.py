@@ -28,6 +28,7 @@ from kkrunner.remote.worker import _SPEC_ENV, _START_FD_ENV
 from kkrunner.runs.base import ExecutionSpec, FailurePhase, LaunchSpec, RunState, SubmissionNotStarted
 from kkrunner.support.durability import durable_mkdir, durable_write_json, fsync_directory
 from kkrunner.support.growing_file_tail import follow_job_files
+from kkrunner.support.process_identity import ProcessIdentity
 
 
 def _status_reply(state, return_code=None, *, failure_phase=None, error=None):
@@ -88,12 +89,12 @@ def _decode_handle(value):
         raise ValueError("Invalid remote execution id")
     kind = data.get("kind")
     if kind == "process":
+        try:
+            ProcessIdentity.from_dict(data.get("identity"))
+        except ValueError as exc:
+            raise ValueError("Invalid remote execution id") from exc
         valid = (
-            type(data.get("pid")) is int
-            and data["pid"] > 0
-            and isinstance(data.get("start_time"), str)
-            and bool(data["start_time"])
-            and isinstance(data.get("receipt_id"), str)
+            isinstance(data.get("receipt_id"), str)
             and re.fullmatch(r"[0-9a-f]{32}", data["receipt_id"]) is not None
             and isinstance(data.get("socket_path"), str)
             and bool(data["socket_path"])
@@ -122,23 +123,8 @@ def _absolute(directory, value):
     return os.fspath(path)
 
 
-def _process_info(pid):
-    try:
-        data = Path(f"/proc/{int(pid)}/stat").read_text()
-    except (FileNotFoundError, ProcessLookupError, ValueError):
-        return None
-    end = data.rfind(")")
-    if end < 0:
-        return None
-    fields = data[end + 2 :].split()
-    if len(fields) <= 19:
-        return None
-    return fields[19], fields[0]
-
-
 def _process_running(handle):
-    info = _process_info(handle["pid"])
-    return info is not None and info[0] == str(handle["start_time"]) and info[1] != "Z"
+    return ProcessIdentity.from_dict(handle["identity"]).is_running()
 
 
 def _request_spec(request):
@@ -194,8 +180,8 @@ def _clean_request_outputs(spec, directory, output_path=None, error_path=None):
 
 
 def _local_submit(request):
-    if not sys.platform.startswith("linux"):
-        raise SubmissionNotStarted("Managed local execution requires Linux /proc and Unix sockets")
+    if os.name != "posix":
+        raise SubmissionNotStarted("Managed local execution requires POSIX process groups and Unix sockets")
     from kkrunner.backends.local import materialize_local_spec
 
     # Everything here happens before launching a supervisor. A failed local
@@ -266,15 +252,13 @@ def _local_submit(request):
                 fd, socket_write_fd = socket_write_fd, None
                 os.close(fd)
 
-        info = _process_info(process.pid)
-        if info is None:
-            raise RuntimeError("Started remote process disappeared before identification")
-        start_time, _ = info
+        identity = ProcessIdentity.read(process.pid)
+        if identity is None:
+            raise SubmissionNotStarted("Unable to verify the started remote process identity")
         remote_id = _encode_handle(
             {
                 "kind": "process",
-                "pid": process.pid,
-                "start_time": start_time,
+                "identity": identity.to_dict(),
                 "receipt_id": receipt_id,
                 "socket_path": socket_path,
             }

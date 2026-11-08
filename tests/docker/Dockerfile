@@ -19,7 +19,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv "$VIRTUAL_ENV" \
-    && pip install "psij-python==0.9.11" platformdirs pytest setuptools wheel
+    && pip install "psij-python==0.9.11" platformdirs "psutil>=5.8.0" pytest setuptools wheel
 
 COPY tests/docker/slurm.conf /etc/slurm/slurm.conf
 COPY tests/docker/cgroup.conf /etc/slurm/cgroup.conf

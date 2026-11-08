@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENCE"]
-dependencies = ["platformdirs"]
+dependencies = ["platformdirs", "psutil>=5.8.0"]
 
 [project.optional-dependencies]
 psij = ["psij-python>=0.9.11"]

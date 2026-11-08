@@ -10,7 +10,7 @@ Choose an execution backend
      - Requirements and limits
    * - ``LocalExecutor``
      - A command on the client machine
-     - Raw subprocesses have no reconnect guarantee; managed runs require Linux.
+     - Raw subprocesses have no reconnect guarantee; managed runs require POSIX process groups and Unix sockets.
    * - ``PsijExecutor``
      - A scheduler visible from the client
      - PSI/J extra and scheduler configuration; scheduler IDs are backend facts.

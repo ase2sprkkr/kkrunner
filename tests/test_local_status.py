@@ -22,7 +22,12 @@ def test_disappeared_local_process_is_unknown(monkeypatch):
 
     executor = LocalExecutor()
     handle = remote_service._encode_handle(
-        {"kind": "process", "pid": 12345, "start_time": "0", "receipt_id": "a" * 32, "socket_path": "/missing/socket"}
+        {
+            "kind": "process",
+            "identity": {"pid": 12345, "start_time": 0, "time_basis": "linux-boot"},
+            "receipt_id": "a" * 32,
+            "socket_path": "/missing/socket",
+        }
     )
     run = RunRecord(
         id="run",
@@ -35,7 +40,7 @@ def test_disappeared_local_process_is_unknown(monkeypatch):
         processing_required=True,
     )
     monkeypatch.setattr(remote_service, "_process_outcome", lambda receipt_id: None)
-    monkeypatch.setattr(remote_service, "_process_info", lambda pid: None)
+    monkeypatch.setattr(remote_service.ProcessIdentity, "read", classmethod(lambda cls, pid: None))
     (status,) = executor.status(run)
     assert status.state == RunState.UNKNOWN
 

@@ -2,7 +2,7 @@
 
 Program-independent Python execution, durable run history, file manifests,
 local/MPI processes, SSH transport and optional PSI/J scheduler support.
-The core depends on `platformdirs`; scheduler support is an optional extra.
+The core depends on `platformdirs` and `psutil`; scheduler support is an optional extra.
 
 ```sh
 python -m pip install .
@@ -78,8 +78,8 @@ python -m pytest -q
 To produce archives for sharing, install the build tool with
 `python -m pip install build`, then run `python -m build`. This creates a source
 archive and an installable wheel in `dist/`. CI validates these artifacts on
-Linux with Python 3.9, 3.12 and 3.14, plus macOS client tests on Apple Silicon and
-Intel with Python 3.12. The durable local supervisor currently requires Linux.
+Linux with Python 3.9, 3.12 and 3.14, plus macOS tests on Apple Silicon and
+Intel with Python 3.12, including durable local supervision and reconnect.
 See [development](docs/development.rst) for test scope and packaging details.
 
 ## Publish to PyPI

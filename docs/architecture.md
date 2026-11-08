@@ -11,7 +11,7 @@ describes its role.
 
 Applications own input preparation, executable selection, file-template
 resolution, parsers, result types and their own metadata namespace. KKRunner
-depends only on platformdirs, plus optional psij-python.
+depends on platformdirs and psutil, plus optional psij-python.
 
 TaskFile is an immutable declaration. Its `type` and `info` are opaque strings;
 KKRunner does not resolve application templates or consult format registries.
@@ -113,13 +113,29 @@ this does not wait for the callback itself. Other waiters still await callback
 completion and receive its exception. Required processing is a separate callback
 from this observation-completion notification.
 
-Managed local execution and the direct-process remote service currently require
-Linux because their process identity check reads `/proc/<pid>/stat`. They reject
-unsupported platforms before launching a process. macOS has Unix sockets and
-process groups; the missing piece is a port of the identity check and validation
-of durable supervision. CI covers the macOS client and raw local execution.
-Windows-specific locking/durability code alone does not imply support for a
-managed local supervisor on Windows.
+Managed local execution and the direct-process remote service use POSIX process
+groups and Unix sockets. Linux and macOS are covered by CI; Windows-specific
+locking/durability code alone does not provide a managed supervisor on Windows.
+
+`support.process_identity.ProcessIdentity` owns process identity and uses only
+public psutil API. An opaque backend handle stores the PID, creation time and
+time basis. On Linux the creation time is normalized as
+`Process(pid).create_time() - psutil.boot_time()`. Each observation creates a
+fresh `Process` because its creation time is cached. Boot-time reads before and
+after the observation detect a clock adjustment; an inconsistent observation is
+retried at most three times. A 1 microsecond absolute tolerance, with no relative
+tolerance, covers floating-point subtraction without accepting a neighboring
+Linux clock tick. No old tick-based handle is interpreted as the new format.
+
+Elsewhere the identity uses the absolute `create_time()`. Its precision and
+behavior under clock adjustments depend on the platform. PID plus creation time
+is not a cryptographic or globally unique identity, especially across host
+reboots. psutil's public `is_running()` checks for PID reuse during observation;
+zombies, vanished processes, access errors and persistently unstable reads never
+confirm identity. Without a terminal receipt an unverifiable identity produces
+`UNKNOWN`, preserving the run for later recovery. These are non-atomic
+observations: a process can exit immediately after a successful check, and a
+clock change that reverses entirely between sampled reads can evade detection.
 
 ## Package ownership
 

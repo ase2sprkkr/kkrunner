@@ -19,7 +19,8 @@ PSI/J Slurm execution:
 
    KKRUNNER_RUN_DOCKER_TESTS=1 python -m pytest -q tests/test_ssh_standalone.py tests/test_psij_slurm.py
 
-Managed execution tests need Linux, Unix sockets and process groups.
+Managed execution tests need POSIX process groups and Unix sockets (Linux or
+macOS). Docker SSH/Slurm tests run on Linux.
 
 .. _build-documentation:
 
@@ -92,17 +93,24 @@ commit contained in remote ``develop``; the runtime version must match
 ``validate.yml`` builds one wheel and source archive. Its Linux Python 3.9, 3.12
 and 3.14 jobs install that same wheel, run the smoke test outside the checkout
 and execute the full default suite from the unpacked archive. macOS 15 jobs on
-Apple Silicon and Intel use Python 3.12 and the same artifacts to test package
-imports, CLI commands, raw local execution, transport and file/run models. The
-Linux-only durable supervisor and remote execution service are excluded from
-that subset. These client tests do not require an SSH server or a scheduler.
+Apple Silicon and Intel use Python 3.12 and the same artifacts for the smoke
+test and a selected suite covering imports, CLI, transport, file/run models,
+process identity, durable local supervision, reconnect and the direct-process
+remote service. These tests do not require an SSH server or a scheduler.
+
+Identity tests simulate clock changes, stale cached creation times, recycled PIDs
+and unavailable process information. Linux tests also exercise the real psutil
+API against synthetic proc data through its public ``PROCFS_PATH`` setting;
+no test changes the host's system clock. Linux CI also exercises the minimum
+supported psutil version, ``5.8.0``, on Python 3.9. A fresh-interpreter integration
+test reopens the run store after the submitting client exits.
 
 A separate job builds HTML with warnings as errors and executes the documentation
 examples against that wheel. Regular branch/PR checks and tagged candidates call
 this shared workflow. Optional Docker SSH/Slurm tests remain available via the
 command above.
 
-The publish job waits for the Linux runtime matrix, macOS client matrix and
+The publish job waits for the Linux runtime matrix, macOS matrix and
 documentation job, then downloads the exact artifacts they validated; it does
 not rebuild them.
 A failed check blocks publication. There is no need to infer success from
