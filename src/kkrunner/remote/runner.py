@@ -302,9 +302,6 @@ class RemoteRunner:
                 # Cache patterns use the same transfer logic as inputs,
                 # but an unmatched cache pattern is optional.
                 await self._stage_input_pattern(local, used, required=False)
-                if output_policy != FileSyncPolicy.NEVER:
-                    for remote in await self.executor.transport.expand_files(remote_pattern, remote_root):
-                        pattern_before[remote] = await self.executor.transport.file_signature(remote)
                 continue
 
             # Cache inputs obey precisely the same staging policy as ordinary
@@ -315,10 +312,23 @@ class RemoteRunner:
                 # the calculation may create it and it must be collected.
                 remote = await self.executor.map_path(local)
 
-            before = None
-            if output_policy != FileSyncPolicy.NEVER:
-                before = await self.executor.transport.file_signature(remote)
-            targets[local] = (remote, before)
+            targets[local] = (remote, None)
+
+        if output_policy != FileSyncPolicy.NEVER and (patterns or targets):
+            # Stage all inputs first, then discover and capture all cache
+            # baselines in one request, including exact paths and globs.
+            exact = {remote for remote, _ in targets.values()}
+            entries = await self.executor.transport.query_files(
+                [*patterns, *(remote for remote, _ in targets.values())],
+                root=remote_root,
+            )
+            signatures = {
+                item["path"]: (item["size"], item["mtime_ns"])
+                for item in entries
+                if item["status"] == "ok" and item["type"] == "file"
+            }
+            targets = {local: (remote, signatures.get(remote)) for local, (remote, _) in targets.items()}
+            pattern_before = {remote: before for remote, before in signatures.items() if remote not in exact}
 
         self._cache_targets = targets
         self._cache_patterns = tuple(patterns)

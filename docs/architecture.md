@@ -170,3 +170,40 @@ importing a transport. The manifest and execution identity are separate models.
 execution facts. `projects` adds project membership to that existing lifecycle.
 A scheduler job is the backend part of a run, while a run also includes staging,
 transfer and any required result processing.
+
+## Portable remote file operations
+
+File metadata and discovery use the stateless `kkrunner remote query-files`
+command over the same versioned JSON control protocol as job operations. A
+request contains `paths`, an optional `root`, and an optional `digest` flag.
+Without `root`, paths are literal, including wildcard characters in filenames.
+With `root`, paths are root-confined Python glob patterns (`**` is recursive),
+with duplicate matches removed. Symlinks are followed for metadata, and discovery
+rejects symlinks outside the root. Returned remote paths preserve the requested
+namespace, including symlinked roots such as macOS `/tmp`.
+
+Each result contains `path` and `status`: `ok`, `missing`, or `error`. Successful
+results include `size`, `mtime_ns` from `st_mtime_ns`, and `type` (`file`,
+`directory`, or `other`). Requested SHA-256 digests are computed only for regular
+files. Missing exact paths remain explicit; unmatched globs produce no entries.
+OS errors retain their errno and message and are raised by the transport rather
+than treated as absence. A batch is a sequence of observations, not an atomic
+snapshot of the filesystem.
+
+`kkrunner.files.queries` owns these filesystem operations and imports no
+transport, backend, or application code. Local and SSH transports share this
+implementation. Discovery returns metadata in the same response; cache baselines
+query all patterns and exact paths together in one request instead of probing
+each match. File queries and execution share the command configured on the SSH
+transport or its `RemoteEndpointExecutor`, including custom Python environments.
+
+Single-file uploads retain temporary-file staging and atomic replacement. The
+`finalize-upload` operation uses `os.utime(ns=...)` and `os.replace()` to publish
+the temporary file while preserving timestamp precision. Downloads still verify
+source signatures before and after copying. No GNU `stat`, `sha256sum`, or
+`touch -d` commands are needed. Bulk transfers retain the existing tar pipeline.
+
+There is no remote package-installation bootstrap in KKRunner. Target KKRunner
+must already be installed for remote execution and these stateless file
+operations. Raw command execution and tar uploads do not invoke the service.
+Neither a persistent file server nor an OS-specific fallback is required.

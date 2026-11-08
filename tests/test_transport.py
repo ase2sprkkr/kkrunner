@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -110,9 +111,7 @@ def test_transport_missing_file_is_optional_but_provenance_digest_is_strict(tmp_
 
 
 def test_ssh_and_local_globstar_agree_on_hidden_entries(tmp_path):
-    """Remote glob semantics match the local transport, including dotfiles."""
-    from kkrunner.remote.transport import _match_relative_path, expand_local_files
-
+    """Exercise both transports, including Python glob's hidden-entry rules."""
     for name in (
         "shown/one.dat",
         "shown/.private.dat",
@@ -124,11 +123,21 @@ def test_ssh_and_local_globstar_agree_on_hidden_entries(tmp_path):
         destination = tmp_path / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(name)
-    names = tuple((str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if path.is_file()))
-    for pattern in ("**/*.dat", "shown/**/*.dat", "**/.*.dat", "**/.hidden/*.dat", ".hidden/*.dat", "shown/one.dat"):
-        local = {str(os.path.relpath(path, tmp_path)) for path in expand_local_files(pattern, tmp_path)}
-        ssh = {name for name in names if _match_relative_path(name, pattern)}
-        assert ssh == local, (pattern, ssh, local)
+
+    async def check():
+        for pattern in (
+            "**/*.dat",
+            "shown/**/*.dat",
+            "**/.*.dat",
+            "**/.hidden/*.dat",
+            ".hidden/*.dat",
+            "shown/one.dat",
+        ):
+            local = await LocalTransport().expand_files(pattern, tmp_path)
+            remote = await _LoopbackSshTransport().expand_files(pattern, tmp_path)
+            assert remote == local
+
+    asyncio.run(check())
 
 
 def test_strict_transfer_refuses_wildcard_symlink_outside_source_root(tmp_path):
@@ -155,7 +164,7 @@ class _LoopbackSshTransport(SshTransport):
     """Exercise the real SSH transfer implementation without an SSH server."""
 
     def __init__(self, *, zstd=False):
-        super().__init__("local-test", zstd=zstd)
+        super().__init__("local-test", zstd=zstd, command=(sys.executable, "-m", "kkrunner", "remote"))
 
     def _command(self, argv, cwd=None):
         assert cwd is None
@@ -332,63 +341,49 @@ def test_ssh_get_file_preserves_subprocess_failure(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "method, command, stdout, expected",
-    [
-        ("file_digest", 'sha256sum -- "$1"', b"1234abcd  folder name/result.out\n", "1234abcd"),
-        (
-            "file_signature",
-            'stat -c "%s|%Y|%y" -- "$1"',
-            b"10|1729000000|2024-10-15 12:00:00.250000000 +0000\n",
-            (10, 1729000000250000000),
-        ),
-    ],
+    "method, expected", [("file_digest", "1234abcd"), ("file_signature", (10, 1729000000250000000))]
 )
-@pytest.mark.parametrize("returncode", (0, 3, 17))
-def test_ssh_file_probes_use_same_absent_and_error_contract(method, command, stdout, expected, returncode):
+@pytest.mark.parametrize("status", ("ok", "missing", "error"))
+def test_ssh_file_queries_distinguish_absence_and_errors(method, expected, status):
     calls = []
+    path = "folder name/result.out"
+    item = {"path": path, "status": status, "size": 10, "mtime_ns": 1729000000250000000, "type": "file"}
+    if status == "ok":
+        item["digest"] = "1234abcd"
+    elif status == "error":
+        item["error"] = {"errno": 13, "message": "permission denied"}
 
     class ProbedTransport(SshTransport):
         async def run(self, argv, *, cwd=None, input=None, check=True):
-            calls.append((argv, check))
-            return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr=b"probe failure")
+            calls.append((argv, json.loads(input), check))
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps([item]).encode(), stderr=b"")
 
-    path = "folder name/result.out"
     query = getattr(ProbedTransport("example-host"), method)
-    if returncode == 17:
-        with pytest.raises(subprocess.CalledProcessError) as error:
+    if status == "error":
+        with pytest.raises(PermissionError):
             asyncio.run(query(path))
-        assert error.value.returncode == 17
-        assert error.value.output == stdout
-        assert error.value.stderr == b"probe failure"
     else:
-        assert asyncio.run(query(path)) == (None if returncode == 3 else expected)
-    assert calls == [(("sh", "-c", f'[ -f "$1" ] || exit 3; {command}', "sh", path), False)]
+        assert asyncio.run(query(path)) == (None if status == "missing" else expected)
+    assert calls == [
+        (
+            ("kkrunner", "remote", "--protocol-version", "1", "query-files"),
+            {"paths": [path], "root": None, "digest": method == "file_digest"},
+            True,
+        )
+    ]
 
 
-@pytest.mark.parametrize("status", (0, 3, 255))
-def test_ssh_glob_directory_probe_distinguishes_missing_and_transport_error(status):
-    calls = []
+def test_ssh_file_query_preserves_command_errors():
+    class Failed(SshTransport):
+        async def start(self, argv, *, cwd=None, stdin=None):
+            return await LocalTransport().start(
+                (sys.executable, "-c", "import sys; sys.stderr.write('connection failed'); sys.exit(255)"), stdin=stdin
+            )
 
-    class FakeSsh(SshTransport):
-        async def run(self, argv, *, cwd=None, input=None, check=True):
-            calls.append(tuple(argv))
-            if argv[0] == "sh":
-                return subprocess.CompletedProcess(argv, status, b"", b"ssh connection failed")
-            assert argv[0] == "find"
-            return subprocess.CompletedProcess(argv, 0, b"", b"")
-
-    async def check():
-        return await FakeSsh("example-host").expand_files("results/*.dat", "/root")
-
-    if status == 255:
-        with pytest.raises(subprocess.CalledProcessError) as error:
-            asyncio.run(check())
-        assert error.value.returncode == status
-        assert error.value.stderr == b"ssh connection failed"
-    else:
-        assert asyncio.run(check()) == ()
-    assert calls[0] == ("sh", "-c", '[ -d "$1" ] || exit 3', "sh", "/root/results")
-    assert len(calls) == (2 if status == 0 else 1)
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        asyncio.run(Failed("host").expand_files("*.dat", "/root"))
+    assert error.value.returncode == 255
+    assert error.value.stderr == b"connection failed"
 
 
 @pytest.mark.parametrize("zstd", (False, True))

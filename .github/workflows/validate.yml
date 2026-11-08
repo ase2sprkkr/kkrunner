@@ -117,6 +117,7 @@ jobs:
               'tests/test_file_fingerprints.py',
               'tests/test_file_versions.py',
               'tests/test_transport.py',
+              'tests/test_file_queries.py',
               'tests/test_process_identity.py',
               'tests/test_local_managed.py',
               'tests/test_local_status.py',

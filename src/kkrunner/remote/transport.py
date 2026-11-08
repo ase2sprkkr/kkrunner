@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import os
 import posixpath
 import shlex
 import shutil
 import subprocess
-from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Optional, Protocol
 from uuid import uuid4
 
-from kkrunner.files.paths import expand_local_candidates, has_file_magic
+from kkrunner.files.queries import _sources, checked_files, expand_local_files, local_file_signature, query_files
 from kkrunner.files.versions import file_digest
+from kkrunner.remote.protocol import json_request
 
 
 class RunningCommand(Protocol):
@@ -28,113 +27,6 @@ class RunningCommand(Protocol):
     async def wait(self) -> int: ...
 
     def terminate(self) -> None: ...
-
-
-def _sources(sources):
-    if isinstance(sources, (str, bytes, os.PathLike)):
-        return (sources,)
-    return tuple(sources)
-
-
-def _local_pattern(source, root):
-    root = Path(root).expanduser().resolve()
-    source = os.fspath(source)
-    path = Path(source).expanduser()
-    if not path.is_absolute():
-        path = root / path
-    pattern = os.path.abspath(os.fspath(path))
-    try:
-        os.path.relpath(pattern, root)
-    except ValueError as exc:
-        raise ValueError(f"File pattern {source!r} is outside source root {root}") from exc
-    relative = os.path.relpath(pattern, root)
-    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
-        raise ValueError(f"File pattern {source!r} is outside source root {root}")
-    return root, pattern
-
-
-def expand_local_files(sources, root):
-    """Expand local source paths/patterns below *root* into concrete files."""
-    root = Path(root).expanduser().resolve()
-    files = []
-    seen = set()
-    for source in _sources(sources):
-        _, pattern = _local_pattern(source, root)
-        for match in expand_local_candidates(pattern):
-            path = Path(match)
-            if not path.is_file():
-                continue
-            path = path.resolve()
-            try:
-                path.relative_to(root)
-            except ValueError as exc:
-                raise ValueError(f"Expanded file {path} is outside source root {root}") from exc
-            value = os.fspath(path)
-            if value not in seen:
-                seen.add(value)
-                files.append(value)
-    return tuple(files)
-
-
-def _posix_relative_pattern(source, root):
-    source = os.fspath(source)
-    root = posixpath.normpath(os.fspath(root))
-    if posixpath.isabs(source):
-        pattern = posixpath.normpath(source)
-        try:
-            common = posixpath.commonpath((root, pattern))
-        except ValueError as exc:
-            raise ValueError(f"File pattern {source!r} is outside source root {root}") from exc
-        if common != root:
-            raise ValueError(f"File pattern {source!r} is outside source root {root}")
-        relative = posixpath.relpath(pattern, root)
-    else:
-        relative = posixpath.normpath(source)
-    if relative == ".." or relative.startswith("../"):
-        raise ValueError(f"File pattern {source!r} is outside source root {root}")
-    return relative
-
-
-def _match_component(name, pattern):
-    if name.startswith(".") and not pattern.startswith("."):
-        return False
-    return fnmatch.fnmatchcase(name, pattern)
-
-
-def _match_relative_path(path, pattern):
-    parts = PurePosixPath(path).parts
-    patterns = PurePosixPath(pattern).parts
-
-    @lru_cache(maxsize=None)
-    def match(path_index, pattern_index):
-        if pattern_index == len(patterns):
-            return path_index == len(parts)
-        current = patterns[pattern_index]
-        if current == "**":
-            # Match glob.glob(recursive=True): an implicit wildcard never
-            # descends into a hidden directory or consumes a hidden file.
-            return match(path_index, pattern_index + 1) or (
-                path_index < len(parts)
-                and not parts[path_index].startswith(".")
-                and match(path_index + 1, pattern_index)
-            )
-        return (
-            path_index < len(parts)
-            and _match_component(parts[path_index], current)
-            and match(path_index + 1, pattern_index + 1)
-        )
-
-    return match(0, 0)
-
-
-def _literal_prefix(pattern):
-    parts = PurePosixPath(pattern).parts
-    prefix = []
-    for part in parts:
-        if has_file_magic(part) or part == "**":
-            break
-        prefix.append(part)
-    return prefix
 
 
 def _local_temporary_path(destination):
@@ -175,6 +67,10 @@ class Transport:
         """Expand paths/patterns on the target filesystem into concrete files."""
         raise NotImplementedError
 
+    async def query_files(self, sources, *, root=None, digest=False):
+        """Query literal paths, or expand root-confined patterns, in one batch."""
+        raise NotImplementedError
+
     async def read_file(self, path):
         raise NotImplementedError
 
@@ -185,28 +81,6 @@ class Transport:
     async def file_signature(self, path):
         """Return ``(size, mtime_ns)`` for *path*, or ``None`` if absent."""
         raise NotImplementedError
-
-
-def local_file_signature(path):
-    """Return ``(size, mtime_ns)`` for a local file, or ``None`` if absent."""
-    try:
-        stat = os.stat(path)
-    except FileNotFoundError:
-        return None
-    return stat.st_size, stat.st_mtime_ns
-
-
-def _parse_remote_file_signature(raw):
-    """Parse GNU ``stat`` output into ``(size, mtime_ns)``."""
-    size, seconds, timestamp = raw.decode("utf8").rstrip("\n").split("|", 2)
-    fraction = ""
-    if "." in timestamp:
-        fraction = timestamp.split(".", 1)[1].split(None, 1)[0]
-    nanoseconds = int((fraction + "000000000")[:9]) if fraction else 0
-    return int(size), int(seconds) * 1_000_000_000 + nanoseconds
-
-
-# Kept temporarily for code using the helper inside the execution package.
 
 
 async def _completed_process(process, argv, input=None, check=True):
@@ -277,6 +151,9 @@ class LocalTransport(Transport):
     async def get_file(self, source, destination):
         await self.put_file(source, destination)
 
+    async def query_files(self, sources, *, root=None, digest=False):
+        return checked_files(await asyncio.to_thread(query_files, sources, root=root, digest=digest))
+
     async def expand_files(self, sources, root):
         return expand_local_files(sources, root)
 
@@ -312,7 +189,8 @@ class LocalTransport(Transport):
 class SshTransport(Transport):
     """Transport using the system ``ssh`` client."""
 
-    def __init__(self, host, *, ssh="ssh", options=(), zstd=False):
+    def __init__(self, host, *, ssh="ssh", options=(), zstd=False, command=("kkrunner", "remote")):
+        self.command = tuple(command)
         self.host = host
         self.ssh = ssh
         self.options = tuple(options)
@@ -369,17 +247,16 @@ class SshTransport(Transport):
                 await _completed_process(process, command)
             if local_file_signature(source) != signature:
                 raise RuntimeError(f"Local file changed while uploading: {source}")
-            seconds, nanoseconds = divmod(signature[1], 1_000_000_000)
-            await self.run(
-                (
-                    "touch",
-                    "-d",
-                    f"@{seconds}.{nanoseconds:09d}",
-                    "--",
-                    temporary,
-                )
+            await json_request(
+                self,
+                self.command,
+                "finalize-upload",
+                payload={
+                    "temporary": temporary,
+                    "destination": destination,
+                    "mtime_ns": signature[1],
+                },
             )
-            await self.run(("mv", "-f", "--", temporary, destination))
         except BaseException:
             # Remote cleanup is best-effort and must not mask the upload error.
             try:
@@ -419,43 +296,27 @@ class SshTransport(Transport):
                 pass
             raise
 
-    async def expand_files(self, sources, root):
-        root = posixpath.normpath(os.fspath(root))
-        files = []
-        seen = set()
-        for source in _sources(sources):
-            pattern = _posix_relative_pattern(source, root)
-            if not has_file_magic(pattern):
-                path = posixpath.join(root, pattern)
-                if await self.file_signature(path) is not None and path not in seen:
-                    seen.add(path)
-                    files.append(path)
-                continue
+    async def query_files(self, sources, *, root=None, digest=False):
+        results = await json_request(
+            self,
+            self.command,
+            "query-files",
+            payload={
+                "paths": [os.fsdecode(path) for path in _sources(sources)],
+                "root": None if root is None else os.fsdecode(root),
+                "digest": digest,
+            },
+        )
+        return checked_files(results)
 
-            prefix = _literal_prefix(pattern)
-            search_root = posixpath.join(root, *prefix) if prefix else root
-            exists = await self.run(
-                ("sh", "-c", '[ -d "$1" ] || exit 3', "sh", search_root),
-                check=False,
+    async def expand_files(self, sources, root):
+        return tuple(
+            sorted(
+                item["path"]
+                for item in await self.query_files(sources, root=root)
+                if item["status"] == "ok" and item["type"] == "file"
             )
-            if exists.returncode == 3:
-                continue
-            if exists.returncode:
-                raise subprocess.CalledProcessError(
-                    exists.returncode,
-                    exists.args,
-                    output=exists.stdout,
-                    stderr=exists.stderr,
-                )
-            result = await self.run(("find", search_root, "-type", "f", "-print0"))
-            for item in result.stdout.decode("utf8").split("\0"):
-                if not item:
-                    continue
-                relative = posixpath.relpath(item, root)
-                if _match_relative_path(relative, pattern) and item not in seen:
-                    seen.add(item)
-                    files.append(item)
-        return tuple(sorted(files))
+        )
 
     @staticmethod
     async def _pipe(source, destination):
@@ -557,27 +418,12 @@ class SshTransport(Transport):
     async def read_file(self, path):
         return (await self.run(("cat", "--", os.fspath(path)))).stdout
 
-    async def _file_probe(self, path, command):
-        """Run a remote file query; absent files are not command failures."""
-        result = await self.run(
-            ("sh", "-c", f'[ -f "$1" ] || exit 3; {command}', "sh", os.fspath(path)),
-            check=False,
-        )
-        if result.returncode == 3:
-            return None
-        if result.returncode:
-            raise subprocess.CalledProcessError(
-                result.returncode,
-                result.args,
-                output=result.stdout,
-                stderr=result.stderr,
-            )
-        return result.stdout
-
     async def file_digest(self, path):
-        output = await self._file_probe(path, 'sha256sum -- "$1"')
-        return None if output is None else output.decode("ascii").split(None, 1)[0]
+        item = (await self.query_files([path], digest=True))[0]
+        return item.get("digest")
 
     async def file_signature(self, path):
-        output = await self._file_probe(path, 'stat -c "%s|%Y|%y" -- "$1"')
-        return None if output is None else _parse_remote_file_signature(output)
+        item = (await self.query_files([path]))[0]
+        if item["status"] == "missing" or item["type"] != "file":
+            return None
+        return item["size"], item["mtime_ns"]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import glob
-import json
 import os
 import posixpath
 import warnings
@@ -15,7 +14,7 @@ from uuid import uuid4
 from kkrunner.backends.endpoint import endpoint_for_executor
 from kkrunner.files.manifest import CacheEntry, FileEntry, FileManifest, FileMapping, FileSyncPolicy
 from kkrunner.files.versions import file_digest
-from kkrunner.remote.protocol import CONTROL_PROTOCOL_VERSION
+from kkrunner.remote.protocol import control_command, json_request
 from kkrunner.remote.runner import RemoteRunner, _run_sync
 from kkrunner.remote.stream import FramedRunningCommand
 from kkrunner.runs.base import (
@@ -413,7 +412,7 @@ class RemoteEndpointExecutor(Executor):
         *,
         backend="local",
         backend_options=None,
-        command=("kkrunner", "remote"),
+        command=None,
         filesystem_id=None,
     ):
         if backend not in _REMOTE_BACKENDS:
@@ -422,7 +421,9 @@ class RemoteEndpointExecutor(Executor):
         self.filesystem_id = filesystem_id
         self.backend = backend
         self.backend_options = dict(backend_options or {})
-        self.command = tuple(command)
+        self.command = tuple(command if command is not None else getattr(transport, "command", ("kkrunner", "remote")))
+        if hasattr(transport, "command"):
+            transport.command = self.command
         self.computer = getattr(transport, "host", None)
         self._remote_home_cache = None
 
@@ -436,12 +437,10 @@ class RemoteEndpointExecutor(Executor):
         return self._remote_home_cache
 
     async def _json_request(self, action, *args, payload=None):
-        data = None if payload is None else json.dumps(payload).encode("utf8")
-        result = await self.transport.run(self._control_command(action, *args), input=data)
-        return json.loads(result.stdout.decode("utf8"))
+        return await json_request(self.transport, self.command, action, *args, payload=payload)
 
     def _control_command(self, action, *args):
-        return (*self.command, "--protocol-version", str(CONTROL_PROTOCOL_VERSION), action, *args)
+        return control_command(self.command, action, *args)
 
     @staticmethod
     def _context(endpoint, launch):

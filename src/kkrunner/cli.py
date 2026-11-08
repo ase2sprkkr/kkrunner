@@ -55,6 +55,8 @@ def parser(parser, *, user=False):
         ack.add_argument("remote_id")
 
         actions.add_parser("resolve-mpi")
+        actions.add_parser("query-files")
+        actions.add_parser("finalize-upload")
 
 
 def _print_json(value):
@@ -79,6 +81,18 @@ def run(args, global_args):
     from kkrunner.remote.protocol import check_control_protocol
 
     check_control_protocol(args.protocol_version)
+    if args.remote_action == "query-files":
+        from kkrunner.files.queries import query_files
+
+        request = json.load(sys.stdin)
+        _print_json(query_files(request["paths"], root=request.get("root"), digest=request.get("digest", False)))
+        return
+    if args.remote_action == "finalize-upload":
+        from kkrunner.files.queries import finalize_upload
+
+        finalize_upload(**json.load(sys.stdin))
+        _print_json({"published": True})
+        return
     from kkrunner.remote.service import (
         acknowledge_remote,
         acknowledge_submission,

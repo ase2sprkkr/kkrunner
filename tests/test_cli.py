@@ -72,9 +72,10 @@ def test_resolve_mpi_command_preserves_integer_process_count(monkeypatch):
     assert output == [{"mpi": ("mpirun", "-np", "4")}]
 
 
-def test_incompatible_protocol_rejected_before_request_is_read(monkeypatch):
+@pytest.mark.parametrize("action", ["submit", "query-files", "finalize-upload"])
+def test_incompatible_protocol_rejected_before_request_is_read(monkeypatch, action):
     monkeypatch.setattr(remote_command.sys, "stdin", io.StringIO("not JSON"))
-    args = SimpleNamespace(remote_action="submit", protocol_version=CONTROL_PROTOCOL_VERSION + 1)
+    args = SimpleNamespace(remote_action=action, protocol_version=CONTROL_PROTOCOL_VERSION + 1)
     with pytest.raises(ValueError, match="Unsupported remote control protocol"):
         remote_command.run(args, None)
 
