@@ -113,11 +113,13 @@ this does not wait for the callback itself. Other waiters still await callback
 completion and receive its exception. Required processing is a separate callback
 from this observation-completion notification.
 
-Managed local execution and the direct-process remote service require Linux
-(/proc, Unix sockets and process groups). They reject unsupported platforms
-before launching a process. Raw local subprocess execution and SSH clients have
-separate platform requirements; Windows-specific locking/durability code alone
-does not imply support for a managed local supervisor on Windows.
+Managed local execution and the direct-process remote service currently require
+Linux because their process identity check reads `/proc/<pid>/stat`. They reject
+unsupported platforms before launching a process. macOS has Unix sockets and
+process groups; the missing piece is a port of the identity check and validation
+of durable supervision. CI covers the macOS client and raw local execution.
+Windows-specific locking/durability code alone does not imply support for a
+managed local supervisor on Windows.
 
 ## Package ownership
 

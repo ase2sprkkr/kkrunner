@@ -78,8 +78,9 @@ python -m pytest -q
 To produce archives for sharing, install the build tool with
 `python -m pip install build`, then run `python -m build`. This creates a source
 archive and an installable wheel in `dist/`. CI validates these artifacts on
-Python 3.9, 3.12 and 3.14. See [development](docs/development.rst) for integration
-tests and packaging details.
+Linux with Python 3.9, 3.12 and 3.14, plus macOS client tests on Apple Silicon and
+Intel with Python 3.12. The durable local supervisor currently requires Linux.
+See [development](docs/development.rst) for test scope and packaging details.
 
 ## Publish to PyPI
 

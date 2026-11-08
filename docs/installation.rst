@@ -36,8 +36,13 @@ execution host. MPI execution needs a compatible MPI launcher there.
 Platforms
 -----------
 
-Managed local execution and the direct-process remote service require Linux:
-they use ``/proc``, Unix sockets and process groups for durable supervision.
-Raw local execution uses subprocesses and has no restart guarantee. SSH clients
-need the system ``ssh`` executable. A client does not need ASE or scientific
-parsers even when the application that submitted its runs uses them.
+Managed local execution and the direct-process remote service currently require
+Linux: their process identity check reads ``/proc/<pid>/stat``. macOS has Unix
+sockets and process groups, but this identity check has not been ported there.
+
+macOS CI covers installation, the CLI, raw local execution, transport and file/run
+models on Apple Silicon and Intel. It does not cover the durable local supervisor
+or a macOS execution target. Raw local execution has no restart guarantee; an
+SSH client can submit to a supported execution host and needs the system ``ssh``
+executable. A client does not need ASE or scientific parsers even when the
+application that submitted its runs uses them.

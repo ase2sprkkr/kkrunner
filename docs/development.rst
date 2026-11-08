@@ -89,15 +89,22 @@ alpha. The workflow does not create a GitHub Release. The tag must point to a
 commit contained in remote ``develop``; the runtime version must match
 ``pyproject.toml``. Commit all candidate files before tagging.
 
-``validate.yml`` builds one wheel and source archive. Its Python 3.9, 3.12 and
-3.14 jobs install that same wheel, run the smoke test outside the checkout and
-execute the full default suite from the unpacked archive. A separate job builds
-HTML with warnings as errors and executes the documentation examples against
-that wheel. Regular branch/PR checks and tagged candidates call this shared
-workflow. Optional Docker SSH/Slurm tests remain available via the command above.
+``validate.yml`` builds one wheel and source archive. Its Linux Python 3.9, 3.12
+and 3.14 jobs install that same wheel, run the smoke test outside the checkout
+and execute the full default suite from the unpacked archive. macOS 15 jobs on
+Apple Silicon and Intel use Python 3.12 and the same artifacts to test package
+imports, CLI commands, raw local execution, transport and file/run models. The
+Linux-only durable supervisor and remote execution service are excluded from
+that subset. These client tests do not require an SSH server or a scheduler.
 
-The publish job waits for the entire runtime matrix and documentation job,
-then downloads the exact artifacts they validated; it does not rebuild them.
+A separate job builds HTML with warnings as errors and executes the documentation
+examples against that wheel. Regular branch/PR checks and tagged candidates call
+this shared workflow. Optional Docker SSH/Slurm tests remain available via the
+command above.
+
+The publish job waits for the Linux runtime matrix, macOS client matrix and
+documentation job, then downloads the exact artifacts they validated; it does
+not rebuild them.
 A failed check blocks publication. There is no need to infer success from
 separate workflow runs for the same commit.
 

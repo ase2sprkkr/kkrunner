@@ -69,6 +69,54 @@ jobs:
           subprocess.run([sys.executable, '-m', 'pytest', '-q'], cwd=root, check=True)
           PY
 
+  macos-client:
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v7
+        with:
+          name: python-distributions
+          path: dist/
+      - name: Install the candidate wheel
+        run: |
+          python -m pip install pytest dist/*.whl
+          python -m pip check
+      # The durable direct-process supervisor currently requires Linux /proc.
+      - name: Test the macOS client and raw local execution
+        env:
+          PYTHONPATH: ''
+        run: |
+          python - <<'PYCODE'
+          from pathlib import Path
+          import subprocess, sys, tarfile, tempfile
+
+          directory = Path(tempfile.mkdtemp())
+          with tarfile.open(next(Path('dist').glob('*.tar.gz'))) as source:
+              source.extractall(directory, filter='data')
+          root = next(directory.iterdir())
+          for arguments in (['--help'], ['remote', '--help']):
+              subprocess.run(['kkrunner', *arguments], cwd=directory, check=True)
+          tests = [
+              'tests/test_package_structure.py',
+              'tests/test_cli.py',
+              'tests/test_run_model.py',
+              'tests/test_run_record_schema.py',
+              'tests/test_file_fingerprints.py',
+              'tests/test_file_versions.py',
+              'tests/test_transport.py',
+              'tests/test_path_streams.py::test_raw_local_paths_and_stdin_are_materialized_at_submission',
+          ]
+          subprocess.run([sys.executable, '-m', 'pytest', '-q', *tests],
+                         cwd=root, check=True)
+          PYCODE
+
   documentation:
     needs: build
     runs-on: ubuntu-latest
