@@ -1,0 +1,78 @@
+# Configure PyPI Trusted Publishing before public distribution:
+# owner ase2sprkkr, repository kkrunner, workflow publish-pypi.yml, environment pypi.
+# Protect that environment with reviewers and v* tag rules.
+name: Publish to PyPI
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-check:
+    name: Check tagged candidate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a version tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: test "$REF_TYPE" = tag
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check tag, package version and develop ancestry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          PYTHONPATH: ''
+        run: |
+          git fetch --no-tags origin +refs/heads/develop:refs/remotes/origin/develop
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/develop; then
+            echo 'The candidate tag must point to a commit on develop.' >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import ast, os, pathlib, tomllib
+
+          version = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']
+          expected = f'v{version}'
+          if os.environ['RELEASE_TAG'] != expected:
+              raise SystemExit(f'Tag must be {expected}, not {os.environ["RELEASE_TAG"]}')
+          module = ast.parse(pathlib.Path('src/kkrunner/__init__.py').read_text())
+          runtime_version = next(ast.literal_eval(node.value) for node in module.body
+                                 if isinstance(node, ast.Assign)
+                                 and any(isinstance(t, ast.Name) and t.id == '__version__'
+                                         for t in node.targets))
+          if runtime_version != version:
+              raise SystemExit('Runtime and distribution versions differ')
+          PY
+
+  validate:
+    needs: release-check
+    uses: ./.github/workflows/validate.yml
+
+  publish:
+    name: Publish to PyPI
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kkrunner/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: python-distributions
+          path: dist/
+      - name: Publish the tested artifacts with PyPI Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
