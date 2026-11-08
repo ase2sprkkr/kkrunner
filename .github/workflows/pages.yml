@@ -3,7 +3,6 @@ name: Publish documentation
 on:
   push:
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -33,4 +32,4 @@ jobs:
         uses: actions/configure-pages@v5
       - name: Deploy documentation
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v6

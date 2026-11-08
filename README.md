@@ -128,9 +128,11 @@ Use the same Python for dependency installation and Makefile targets; the
 persistent execution, manifests, projects, schedulers, remote execution and the
 CLI; [development](docs/development.rst) covers builds and releases. Generated
 API pages and HTML are not committed. CI validates documentation against the
-installed wheel, uploads the HTML artifact and deploys it to GitHub Pages on
-`master`. Enable **Settings → Pages → Build and deployment → GitHub Actions**
-and allow `master` in the `github-pages` environment deployment rules.
+installed wheel and uploads the HTML artifact. The separate documentation
+workflow deploys it to GitHub Pages for `v*` tags or manual runs. Enable
+**Settings → Pages → Build and deployment → GitHub Actions** and allow release
+tags and manually selected source branches in the `github-pages` environment
+deployment rules.
 
 Source provenance is recorded in [development remarks](docs/remarks/source-provenance.md);
 the license is in [LICENCE](LICENCE).
