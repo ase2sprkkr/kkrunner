@@ -120,6 +120,7 @@ def test_generic_manager_has_no_application_methods():
     assert not hasattr(RunManager, "load_result")
     assert not hasattr(RunManager, "attach_sprkkr")
 
+
 def test_root_import_is_lazy():
     code = """\
 import kkrunner
@@ -131,3 +132,34 @@ assert all(name not in sys.modules for name in (
 assert 'ExecutionSpec' in dir(kkrunner)
 """
     subprocess.run([sys.executable, "-c", code], check=True, timeout=10)
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    ("kkrunner", "kkrunner.files", "kkrunner.runs", "kkrunner.remote", "kkrunner.backends"),
+)
+def test_lazy_facade_exports_are_cached(module_name):
+    # Exercise all public names in a fresh process; other tests have already
+    # imported implementation modules and would conceal broken lazy paths.
+    code = """
+import importlib
+import sys
+package = importlib.import_module(sys.argv[1])
+resolved = {}
+for name in package.__all__:
+    value = getattr(package, name)
+    assert package.__dict__[name] is value, name
+    resolved[name] = value
+
+def forbidden(name):
+    raise AssertionError("cached attribute unexpectedly resolved again: " + name)
+
+original = package.__getattr__
+package.__getattr__ = forbidden
+try:
+    for name, value in resolved.items():
+        assert getattr(package, name) is value, name
+finally:
+    package.__getattr__ = original
+"""
+    subprocess.run([sys.executable, "-c", code, module_name], check=True, timeout=10)

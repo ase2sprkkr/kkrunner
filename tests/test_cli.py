@@ -123,3 +123,35 @@ else:
 assert not any(name == "kkrunner" or name.startswith("kkrunner.") for name in sys.modules)
 """
     subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)
+
+
+def test_user_parser_is_a_lightweight_subset():
+    parser = argparse.ArgumentParser()
+    remote_command.user_parser(parser)
+    for action in ("status", "cancel", "follow"):
+        parsed = parser.parse_args([action, "opaque"])
+        assert parsed.protocol_version is None
+        assert parsed.remote_action == action
+    assert parser.parse_args(["follow", "opaque", "--live"]).live is True
+    for action in ("submit", "recover", "ack", "ack-submit", "query-files", "finalize-upload", "resolve-mpi"):
+        with pytest.raises(SystemExit):
+            parser.parse_args([action])
+
+
+def test_file_query_cli_does_not_import_remote_execution():
+    import subprocess
+    import sys
+
+    code = """\
+import io
+import sys
+sys.stdin = io.StringIO('{"paths": []}')
+from kkrunner_cli.main import main
+main(["--protocol-version", "1", "query-files"])
+assert "kkrunner.remote.service" not in sys.modules
+assert "kkrunner.remote.executor" not in sys.modules
+assert "kkrunner.backends.pool" not in sys.modules
+assert "kkrunner.runs.manager" not in sys.modules
+"""
+    proc = subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)
+    assert json.loads(proc.stdout) == []
