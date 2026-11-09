@@ -421,7 +421,7 @@ class RemoteEndpointExecutor(Executor):
         self.filesystem_id = filesystem_id
         self.backend = backend
         self.backend_options = dict(backend_options or {})
-        self.command = tuple(command if command is not None else getattr(transport, "command", ("kkrunner", "remote")))
+        self.command = tuple(command if command is not None else getattr(transport, "command", ("kkrunner",)))
         if hasattr(transport, "command"):
             transport.command = self.command
         self.computer = getattr(transport, "host", None)

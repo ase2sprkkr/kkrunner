@@ -17,7 +17,7 @@ from kkrunner.runs.records import RunRecord
 
 def _executor(*, backend="local"):
     return RemoteEndpointExecutor(
-        LocalTransport(), backend=backend, command=(sys.executable, "-m", "kkrunner", "remote")
+        LocalTransport(), backend=backend, command=(sys.executable, "-m", "kkrunner")
     )
 
 

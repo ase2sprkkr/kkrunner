@@ -111,7 +111,7 @@ jobs:
           with tarfile.open(next(Path('dist').glob('*.tar.gz'))) as source:
               source.extractall(directory, filter='data')
           root = next(directory.iterdir())
-          for arguments in (['--help'], ['remote', '--help']):
+          for arguments in (['--help'], ['status', '--help']):
               subprocess.run(['kkrunner', *arguments], cwd=directory, check=True)
           subprocess.run([sys.executable, str(root / 'tests/smoke_distribution.py')],
                          cwd=directory, check=True)

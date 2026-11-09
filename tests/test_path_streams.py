@@ -30,7 +30,7 @@ def test_raw_remote_paths_work_with_only_runner_on_target(tmp_path):
     local, remote = tmp_path / "local", tmp_path / "remote"
     local.mkdir()
     remote.mkdir()
-    executor = RemoteEndpointExecutor(LocalTransport(), command=(sys.executable, "-m", "kkrunner", "remote"))
+    executor = RemoteEndpointExecutor(LocalTransport(), command=(sys.executable, "-m", "kkrunner"))
     spec = ExecutionSpec(
         [sys.executable, "-c", "print(42)"],
         directory=local,

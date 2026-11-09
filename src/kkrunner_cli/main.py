@@ -1,4 +1,4 @@
-"""Stateless target-side commands for remote KKRunner execution."""
+"""Lightweight CLI: route direct control actions without loading KKRunner on --help."""
 
 import json
 import sys
@@ -7,20 +7,14 @@ help = "Control KKRunner execution on this machine."
 description = "Submit, inspect, follow and cancel remote execution handles."
 
 
-def parser(parser, *, user=False):
-    if user:
-        from kkrunner.remote.protocol import CONTROL_PROTOCOL_VERSION
-
-        parser.set_defaults(protocol_version=CONTROL_PROTOCOL_VERSION)
-    else:
-        parser.add_argument(
-            "--protocol-version", type=int, required=True, help="remote control protocol version supplied by the client"
-        )
+def parser(parser):
+    parser.add_argument(
+        "--protocol-version", type=int, help="control protocol version supplied by an execution client"
+    )
     actions = parser.add_subparsers(dest="remote_action", required=True)
 
-    if not user:
-        submit = actions.add_parser("submit")
-        submit.add_argument("directory")
+    submit = actions.add_parser("submit")
+    submit.add_argument("directory")
 
     status = actions.add_parser("status")
     status.add_argument("remote_id")
@@ -43,20 +37,19 @@ def parser(parser, *, user=False):
         help="multiplex calculation stdout/stderr over stdout using the binary protocol",
     )
 
-    if not user:
-        recover = actions.add_parser("recover")
-        recover.add_argument("directory")
-        recover.add_argument("run_id")
+    recover = actions.add_parser("recover")
+    recover.add_argument("directory")
+    recover.add_argument("run_id")
 
-        ack_submit = actions.add_parser("ack-submit")
-        ack_submit.add_argument("run_id")
+    ack_submit = actions.add_parser("ack-submit")
+    ack_submit.add_argument("run_id")
 
-        ack = actions.add_parser("ack")
-        ack.add_argument("remote_id")
+    ack = actions.add_parser("ack")
+    ack.add_argument("remote_id")
 
-        actions.add_parser("resolve-mpi")
-        actions.add_parser("query-files")
-        actions.add_parser("finalize-upload")
+    actions.add_parser("resolve-mpi")
+    actions.add_parser("query-files")
+    actions.add_parser("finalize-upload")
 
 
 def _print_json(value):
@@ -77,10 +70,15 @@ class _FramedSink:
         self.stream.flush()
 
 
-def run(args, global_args):
-    from kkrunner.remote.protocol import check_control_protocol
+def run(args, global_args=None):
+    from kkrunner.remote.protocol import CONTROL_PROTOCOL_VERSION, check_control_protocol
 
-    check_control_protocol(args.protocol_version)
+    version = args.protocol_version
+    if version is None:
+        if args.remote_action not in ("status", "follow", "cancel"):
+            raise ValueError("An explicit --protocol-version is required for internal control actions")
+        version = CONTROL_PROTOCOL_VERSION
+    check_control_protocol(version)
     if args.remote_action == "query-files":
         from kkrunner.files.queries import query_files
 
@@ -165,16 +163,14 @@ def run(args, global_args):
         raise ValueError("Unknown remote action: {}".format(args.remote_action))
 
 
-def main():
+def main(argv=None):
     import argparse
 
-    root = argparse.ArgumentParser(prog="kkrunner")
-    commands = root.add_subparsers(dest="command", required=True)
-    parser(commands.add_parser("remote", help=description))
-    args = root.parse_args()
-    run(args, None)
+    root = argparse.ArgumentParser(prog="kkrunner", description=description)
+    parser(root)
+    args = root.parse_args(argv)
+    run(args)
 
 
-def user_parser(argument_parser):
-    """Human-facing status/follow/cancel subset of the same remote service."""
-    parser(argument_parser, user=True)
+if __name__ == "__main__":
+    main()

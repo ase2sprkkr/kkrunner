@@ -67,7 +67,7 @@ class ExecutorEndpoint:
             object.__setattr__(self, "psij_backend", self.psij_backend or "slurm")
         elif self.executor == "ssh":
             if not self.remote_command:
-                object.__setattr__(self, "remote_command", ("kkrunner", "remote"))
+                object.__setattr__(self, "remote_command", ("kkrunner",))
             if self.psij_backend is not None or self.psij_url is not None:
                 object.__setattr__(self, "psij_backend", self.psij_backend or "slurm")
 

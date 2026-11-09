@@ -1,3 +1,4 @@
-from kkrunner.cli import main
+from kkrunner_cli.main import main
 
-main()
+if __name__ == "__main__":
+    main()

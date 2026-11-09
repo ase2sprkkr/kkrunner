@@ -10,7 +10,7 @@ def test_endpoint_normalizes_known_defaults_without_resolving_hostnames():
 
     assert ExecutorEndpoint(executor="psij") == ExecutorEndpoint(executor="psij", psij_backend="slurm", host="unused")
     assert ExecutorEndpoint(executor="ssh", host="cluster") == ExecutorEndpoint(
-        executor="ssh", host="cluster", remote_command=("kkrunner", "remote")
+        executor="ssh", host="cluster", remote_command=("kkrunner",)
     )
     assert ExecutorEndpoint(executor="ssh", host="cluster") != ExecutorEndpoint(
         executor="ssh", host="cluster.example.org"

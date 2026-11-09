@@ -71,7 +71,7 @@ def _remote_context(tmp_path):
     class Endpoint:
         backend = "local"
         backend_options = {}
-        command = ("kkrunner", "remote")
+        command = ("kkrunner",)
         computer = "host"
         transport = SimpleNamespace()
 

@@ -7,7 +7,7 @@ The core depends on `platformdirs` and `psutil`; scheduler support is an optiona
 ```sh
 python -m pip install .
 python -m pip install '.[psij]'  # optional scheduler support
-kkrunner remote --help
+kkrunner --help
 ```
 
 Run these commands from the KKRunner checkout in a virtual environment.

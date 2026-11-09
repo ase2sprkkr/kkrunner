@@ -28,8 +28,8 @@ For documentation dependencies and the local HTML build, see
 :ref:`build-documentation`.
 
 For SSH execution, install the same KKRunner version on the target and make
-``kkrunner remote`` available to noninteractive SSH commands. An absolute
-command can be supplied as ``("/opt/kkrunner/bin/kkrunner", "remote")``.
+``kkrunner`` available to noninteractive SSH commands. An absolute
+command can be supplied as ``("/opt/kkrunner/bin/kkrunner",)``.
 Scheduler execution needs the PSI/J extra and a configured scheduler on the
 execution host. MPI execution needs a compatible MPI launcher there.
 

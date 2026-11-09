@@ -40,7 +40,7 @@ For a nonstandard installation, pass an explicit protocol command:
 
    executor = RemoteEndpointExecutor(
        SshTransport("user@cluster"),
-       command=("/opt/kkrunner/bin/kkrunner", "remote"),
+       command=("/opt/kkrunner/bin/kkrunner"),
        filesystem_id="cluster-home",
    )
 
@@ -70,7 +70,7 @@ It is useful for development and does not require a second machine:
    local.mkdir()
    remote.mkdir()
    executor = RemoteEndpointExecutor(
-       LocalTransport(), command=(sys.executable, "-m", "kkrunner", "remote"),
+       LocalTransport(), command=(sys.executable, "-m", "kkrunner"),
    )
    outcome = executor.create_run(ExecutionSpec(
        [sys.executable, "-c", "print(44)"],

@@ -119,3 +119,15 @@ def test_generic_manager_has_no_application_methods():
 
     assert not hasattr(RunManager, "load_result")
     assert not hasattr(RunManager, "attach_sprkkr")
+
+def test_root_import_is_lazy():
+    code = """\
+import kkrunner
+import sys
+assert all(name not in sys.modules for name in (
+    'kkrunner.runs', 'kkrunner.files', 'kkrunner.backends',
+    'kkrunner.remote', 'kkrunner.projects', 'psutil',
+))
+assert 'ExecutionSpec' in dir(kkrunner)
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=10)

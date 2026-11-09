@@ -141,7 +141,7 @@ def test_remote_endpoint_reuses_configured_file_service_command():
     from kkrunner.remote.executor import RemoteEndpointExecutor
     from kkrunner.remote.transport import SshTransport
 
-    command = (sys.executable, "-m", "kkrunner", "remote")
+    command = (sys.executable, "-m", "kkrunner")
     transport = SshTransport("host")
     executor = RemoteEndpointExecutor(transport, command=command)
     assert transport.command == executor.command == command

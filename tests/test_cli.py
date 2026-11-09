@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 import kkrunner.remote.service as remote_service
-from kkrunner import cli as remote_command
+from kkrunner_cli import main as remote_command
 from kkrunner.remote.protocol import CONTROL_PROTOCOL_VERSION
 
 
 def remote_args(**kwargs):
-    return SimpleNamespace(protocol_version=CONTROL_PROTOCOL_VERSION, **kwargs)
+    return SimpleNamespace(**({"protocol_version": CONTROL_PROTOCOL_VERSION} | kwargs))
 
 
 def test_status_command_forwards_opaque_remote_handle(monkeypatch):
@@ -80,17 +80,46 @@ def test_incompatible_protocol_rejected_before_request_is_read(monkeypatch, acti
         remote_command.run(args, None)
 
 
-def test_control_protocol_version_is_required_by_parser():
+def test_direct_parser_accepts_user_commands_without_protocol_version():
     parser = argparse.ArgumentParser()
     remote_command.parser(parser)
-    with pytest.raises(SystemExit):
-        parser.parse_args(["status", "opaque"])
-    parsed = parser.parse_args(
-        [
-            "--protocol-version",
-            str(CONTROL_PROTOCOL_VERSION),
-            "status",
-            "opaque",
-        ]
-    )
+    parsed = parser.parse_args(["status", "opaque"])
+    assert parsed.protocol_version is None
+    assert parsed.remote_action == "status"
+    parsed = parser.parse_args(["--protocol-version", str(CONTROL_PROTOCOL_VERSION), "status", "opaque"])
     assert parsed.protocol_version == CONTROL_PROTOCOL_VERSION
+
+
+def test_internal_actions_require_explicit_protocol_version(monkeypatch):
+    monkeypatch.setattr(remote_command.sys, "stdin", io.StringIO("not JSON"))
+    with pytest.raises(ValueError, match="explicit --protocol-version"):
+        remote_command.run(SimpleNamespace(remote_action="submit", protocol_version=None))
+
+
+def test_user_status_infers_local_protocol_version(monkeypatch):
+    calls = []
+    monkeypatch.setattr(remote_service, "status_remote",
+                        lambda remote_id: calls.append(remote_id) or {"state": "running"})
+    output = []
+    monkeypatch.setattr(remote_command, "_print_json", output.append)
+    remote_command.run(remote_args(remote_action="status", remote_id="opaque", protocol_version=None))
+    assert calls == ["opaque"]
+    assert output == [{"state": "running"}]
+
+
+def test_help_does_not_import_kkrunner():
+    import subprocess
+    import sys
+
+    code = """\
+import sys
+from kkrunner_cli.main import main
+try:
+    main(["--help"])
+except SystemExit as exc:
+    assert exc.code == 0
+else:
+    raise AssertionError("help should exit")
+assert not any(name == "kkrunner" or name.startswith("kkrunner.") for name in sys.modules)
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)

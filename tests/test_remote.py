@@ -39,7 +39,7 @@ def _processed_run(executor, spec):
 
 def _executor(transport=None, **kwargs):
     return RemoteEndpointExecutor(
-        transport or LocalTransport(), command=(sys.executable, "-m", "kkrunner", "remote"), **kwargs
+        transport or LocalTransport(), command=(sys.executable, "-m", "kkrunner"), **kwargs
     )
 
 

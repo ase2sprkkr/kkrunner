@@ -59,7 +59,7 @@ assert restarted.store.get(run.id).state == RunState.FINISHED
 local, remote = root / "local", root / "remote"
 local.mkdir()
 remote.mkdir()
-executor = RemoteEndpointExecutor(LocalTransport(), command=(str(Path(sys.executable).parent / "kkrunner"), "remote"))
+executor = RemoteEndpointExecutor(LocalTransport(), command=(str(Path(sys.executable).parent / "kkrunner"),))
 run = executor.create_run(
     ExecutionSpec(
         [sys.executable, "-c", "print(44)"],
@@ -72,7 +72,8 @@ assert run.run().return_code == 0
 assert (local / "remote.out").read_text() == "44\n"
 commands = {entry.name for entry in md.distribution("kkrunner").entry_points if entry.group == "console_scripts"}
 assert commands == {"kkrunner"}, commands
-for arguments in (("--help",), ("remote", "--help")):
+assert importlib.util.find_spec("kkrunner_cli") is not None
+for arguments in (("--help",), ("status", "--help")):
     subprocess.run([str(Path(sys.executable).parent / "kkrunner"), *arguments], check=True, stdout=subprocess.DEVNULL)
 print(
     json.dumps(

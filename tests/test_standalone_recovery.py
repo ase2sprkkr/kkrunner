@@ -243,7 +243,7 @@ def test_failed_download_can_reattach_to_preserved_backend_receipt(tmp_path, mon
             return await super().get_file(source, destination)
 
     transport = Transport()
-    executor = RemoteEndpointExecutor(transport, command=(sys.executable, "-m", "kkrunner", "remote"))
+    executor = RemoteEndpointExecutor(transport, command=(sys.executable, "-m", "kkrunner"))
     manager = RunManager(RunStore(tmp_path / "runs"))
     run = manager.create_run(
         executor,
