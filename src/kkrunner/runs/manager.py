@@ -664,8 +664,6 @@ class RunManager:
     def follow_output(self, run, stdout, stderr, *, from_start=False):
         """Read existing stream bytes without invoking attach or postprocessing."""
         record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
-        if record.execution.backend_id is None:
-            raise RuntimeError(f"Run {record.id} has no backend reference")
         if record.state.is_terminal:
             # A completed job may have acknowledged its backend terminal receipt.
             # Its persisted local files are authoritative and can be replayed.
@@ -684,6 +682,8 @@ class RunManager:
                             destination.flush()
             return {"state": record.state.value, "return_code": record.return_code,
                     "error": record.message}
+        if record.execution.backend_id is None:
+            raise RuntimeError(f"Run {record.id} has no backend reference")
         return self.executor_for(record).follow_output(
             record, stdout, stderr, from_start=from_start,
         )
