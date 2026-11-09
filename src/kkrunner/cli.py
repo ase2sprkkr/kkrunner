@@ -58,6 +58,9 @@ def parser(parser, *, user=False):
         actions.add_parser("query-files")
         actions.add_parser("finalize-upload")
 
+    if user:
+        return {"status": status, "follow": follow, "cancel": cancel}
+
 
 def _print_json(value):
     print(json.dumps(value), flush=True)
@@ -177,4 +180,4 @@ def main():
 
 def user_parser(argument_parser):
     """Human-facing status/follow/cancel subset of the same remote service."""
-    parser(argument_parser, user=True)
+    return parser(argument_parser, user=True)
