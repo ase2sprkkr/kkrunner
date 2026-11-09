@@ -56,6 +56,9 @@ def parser(parser, *, user=False):
         actions.add_parser("query-files")
         actions.add_parser("finalize-upload")
 
+    if user:
+        return {"status": status, "follow": follow, "cancel": cancel}
+
 
 def user_parser(argument_parser):
     """Add only interactive status, follow and cancel actions to another CLI."""
@@ -179,6 +182,11 @@ def main(argv=None):
     parser(root)
     args = root.parse_args(argv)
     run(args)
+
+
+def user_parser(argument_parser):
+    """Human-facing status/follow/cancel subset of the same remote service."""
+    return parser(argument_parser, user=True)
 
 
 if __name__ == "__main__":
