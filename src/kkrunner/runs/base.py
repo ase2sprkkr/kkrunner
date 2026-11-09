@@ -665,6 +665,14 @@ class Executor:
         """
         raise NotImplementedError(f"{type(self).__name__} cannot retrieve persistent result files")
 
+    def cancel_run(self, run):
+        """Request cancellation using a persisted backend identity."""
+        raise NotImplementedError(f"{type(self).__name__} cannot cancel a persisted run")
+
+    def follow_output(self, run, stdout, stderr, *, from_start=False):
+        """Observe existing run streams without attaching or mutating its lifecycle."""
+        raise NotImplementedError(f"{type(self).__name__} cannot follow persisted output")
+
     def snapshot_file(self, run, file, *, destination=None):
         """Read a local file while running, without altering canonical results."""
         if run.execution.directory.remote is not None:

@@ -1,20 +1,20 @@
-"""Human-facing stream hints must not change the backend status protocol."""
+"""An opaque handle identifies a backend, not its working directory or files."""
 
-from kkrunner.remote.service import _encode_handle, remote_stream_paths
+from kkrunner.remote.service import _decode_handle, _encode_handle
 
 
-def test_remote_stream_paths_resolve_relative_paths():
+def test_psij_handle_has_only_backend_identity():
     handle = _encode_handle({
         "kind": "psij", "backend": "slurm", "url": None, "native_id": "123",
-        "directory": "/scratch/work", "output_file": "run.out",
-        "error_file": "/scratch/errors/run.err",
     })
-    assert remote_stream_paths(handle) == {
-        "output_file": "/scratch/work/run.out",
-        "error_file": "/scratch/errors/run.err",
+    assert _decode_handle(handle) == {
+        "kind": "psij", "backend": "slurm", "url": None, "native_id": "123",
     }
 
 
-def test_old_handle_has_no_stream_hints():
-    handle = _encode_handle({"kind": "psij", "backend": "slurm", "url": None, "native_id": "123"})
-    assert remote_stream_paths(handle) == {"output_file": None, "error_file": None}
+def test_legacy_handle_with_extra_fields_remains_decodable():
+    handle = _encode_handle({
+        "kind": "psij", "backend": "slurm", "url": None, "native_id": "123",
+        "directory": "/scratch/work", "output_file": "run.out",
+    })
+    assert _decode_handle(handle)["native_id"] == "123"

@@ -651,6 +651,43 @@ class RunManager:
         )
         return self._process_outcome(record, outcome, process_result, retry=True)
 
+    def cancel_run(self, run):
+        """Request backend cancellation without taking ownership of the run monitor."""
+        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
+        if record.state.is_terminal:
+            return {"state": record.state.value, "return_code": record.return_code,
+                    "error": record.message}
+        if record.execution.backend_id is None:
+            raise RuntimeError(f"Run {record.id} has no backend reference")
+        return self.executor_for(record).cancel_run(record)
+
+    def follow_output(self, run, stdout, stderr, *, from_start=False):
+        """Read existing stream bytes without invoking attach or postprocessing."""
+        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
+        if record.execution.backend_id is None:
+            raise RuntimeError(f"Run {record.id} has no backend reference")
+        if record.state.is_terminal:
+            # A completed job may have acknowledged its backend terminal receipt.
+            # Its persisted local files are authoritative and can be replayed.
+            if from_start:
+                seen = set()
+                for entry, destination in ((record.files.stdout, stdout), (record.files.stderr, stderr)):
+                    if entry is None or entry.local_path is None:
+                        continue
+                    path = os.fspath(entry.local_path)
+                    if path in seen:
+                        continue
+                    seen.add(path)
+                    with open(path, "rb") as source:
+                        while chunk := source.read(65536):
+                            destination.write(chunk)
+                            destination.flush()
+            return {"state": record.state.value, "return_code": record.return_code,
+                    "error": record.message}
+        return self.executor_for(record).follow_output(
+            record, stdout, stderr, from_start=from_start,
+        )
+
     def snapshot_file(self, run, file, *, destination=None):
         """Read current bytes of a declared output/cache, regardless of run state.
 

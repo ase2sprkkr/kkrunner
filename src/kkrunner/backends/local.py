@@ -317,6 +317,21 @@ class LocalExecutor(Executor):
 
         acknowledge_remote(run.execution.backend_id)
 
+    def cancel_run(self, run):
+        from kkrunner.remote.service import cancel_remote
+        return cancel_remote(run.execution.backend_id)
+
+    def follow_output(self, run, stdout, stderr, *, from_start=False):
+        from kkrunner.remote.service import follow_remote
+        files = run.files
+        offset = 0 if from_start else None
+        return follow_remote(
+            run.execution.backend_id, stdout, stderr,
+            stdout_offset=offset, stderr_offset=offset,
+            stdout_path=None if files.stdout is None else files.stdout.local_path,
+            stderr_path=None if files.stderr is None else files.stderr.local_path,
+        )
+
     def status(self, *runs):
         from kkrunner.backends.local_managed import local_status
 

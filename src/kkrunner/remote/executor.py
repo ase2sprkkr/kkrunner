@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import glob
 import os
 import posixpath
@@ -678,6 +679,48 @@ class RemoteEndpointExecutor(Executor):
 
     def snapshot_file(self, run, file, *, destination=None):
         return _run_sync(self._snapshot_file(run, file, destination=destination))
+
+    def cancel_run(self, run):
+        """Request cancellation by backend handle, leaving persistence to its owner."""
+        self._validate_run(run)
+        execution = run.execution
+        return _run_sync(self._cancel(execution.directory.remote, execution.backend_id, run.files))
+
+    async def _follow_output(self, run, stdout, stderr, *, from_start=False):
+        """Read the existing framed transport without starting a run monitor."""
+        self._validate_run(run)
+        execution = run.execution
+        offset = 0 if from_start else None
+        observed = await self._follow(
+            execution.directory.remote,
+            execution.backend_id,
+            run.files,
+            offsets={"out": offset, "err": offset},
+        )
+
+        async def drain(source, destination):
+            while chunk := await source.read(65536):
+                destination.write(chunk)
+                destination.flush()
+
+        try:
+            await asyncio.gather(
+                drain(observed.stdout, stdout),
+                drain(observed.stderr, stderr),
+            )
+            await observed.wait()
+            if observed.terminal is None:
+                raise RuntimeError("Remote follow ended without terminal status")
+            return observed.terminal
+        except BaseException:
+            # Terminate the observation transport, never the backend job.
+            observed.terminate()
+            raise
+
+    def follow_output(self, run, stdout, stderr, *, from_start=False):
+        return _run_sync(self._follow_output(
+            run, stdout, stderr, from_start=from_start,
+        ))
 
     async def _fetch_result_files(self, run, files, *, destinations=None):
         self._validate_run(run)
