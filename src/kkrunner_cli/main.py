@@ -7,14 +7,18 @@ help = "Control KKRunner execution on this machine."
 description = "Submit, inspect, follow and cancel remote execution handles."
 
 
-def parser(parser):
-    parser.add_argument(
-        "--protocol-version", type=int, help="control protocol version supplied by an execution client"
-    )
+def parser(parser, *, user=False):
+    if not user:
+        parser.add_argument(
+            "--protocol-version", type=int, help="control protocol version supplied by an execution client"
+        )
+    else:
+        parser.set_defaults(protocol_version=None)
     actions = parser.add_subparsers(dest="remote_action", required=True)
 
-    submit = actions.add_parser("submit")
-    submit.add_argument("directory")
+    if not user:
+        submit = actions.add_parser("submit")
+        submit.add_argument("directory")
 
     status = actions.add_parser("status")
     status.add_argument("remote_id")
@@ -37,19 +41,26 @@ def parser(parser):
         help="multiplex calculation stdout/stderr over stdout using the binary protocol",
     )
 
-    recover = actions.add_parser("recover")
-    recover.add_argument("directory")
-    recover.add_argument("run_id")
+    if not user:
+        recover = actions.add_parser("recover")
+        recover.add_argument("directory")
+        recover.add_argument("run_id")
 
-    ack_submit = actions.add_parser("ack-submit")
-    ack_submit.add_argument("run_id")
+        ack_submit = actions.add_parser("ack-submit")
+        ack_submit.add_argument("run_id")
 
-    ack = actions.add_parser("ack")
-    ack.add_argument("remote_id")
+        ack = actions.add_parser("ack")
+        ack.add_argument("remote_id")
 
-    actions.add_parser("resolve-mpi")
-    actions.add_parser("query-files")
-    actions.add_parser("finalize-upload")
+        actions.add_parser("resolve-mpi")
+        actions.add_parser("query-files")
+        actions.add_parser("finalize-upload")
+    return {"status": status, "follow": follow, "cancel": cancel}
+
+
+def user_parser(parser):
+    """Install only the human-facing commands, with no internal control verbs."""
+    return globals()["parser"](parser, user=True)
 
 
 def _print_json(value):

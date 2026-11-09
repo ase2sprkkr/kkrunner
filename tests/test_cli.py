@@ -123,3 +123,12 @@ else:
 assert not any(name == "kkrunner" or name.startswith("kkrunner.") for name in sys.modules)
 """
     subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)
+
+
+def test_user_parser_limits_commands():
+    parser = argparse.ArgumentParser()
+    actions = remote_command.user_parser(parser)
+    assert set(actions) == {"status", "follow", "cancel"}
+    assert parser.parse_args(["status", "opaque"]).protocol_version is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["submit", "/work"])

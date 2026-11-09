@@ -261,6 +261,9 @@ def _local_submit(request):
                 "identity": identity.to_dict(),
                 "receipt_id": receipt_id,
                 "socket_path": socket_path,
+                "directory": os.fspath(directory),
+                "output_file": output_path,
+                "error_file": error_path,
             }
         )
 
@@ -328,6 +331,9 @@ def _psij_submit(request):
             "backend": executor.backend,
             "url": executor.url,
             "native_id": backend_id,
+            "directory": os.fspath(request["directory"]),
+            "output_file": runner.result.output_file,
+            "error_file": runner.result.error_file,
         }
     )
     return {
@@ -363,6 +369,29 @@ def _process_outcome(receipt_id):
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeError("Invalid remote process outcome artifact") from exc
     return state, return_code, failure_phase, data.get("error")
+
+
+def remote_stream_paths(remote_id):
+    """Return stream locations from a handle, without querying execution state.
+
+    Handles created before stream locations were included return ``None``
+    for unknown paths. Callers may supply explicit paths in that case.
+    """
+    handle = _decode_handle(remote_id)
+    directory = handle.get("directory")
+
+    def resolve(value):
+        if value is None:
+            return None
+        path = Path(value)
+        if not path.is_absolute() and directory is not None:
+            path = Path(directory) / path
+        return os.fspath(path)
+
+    return {
+        "output_file": resolve(handle.get("output_file")),
+        "error_file": resolve(handle.get("error_file")),
+    }
 
 
 def status_remote(remote_id):
@@ -590,7 +619,10 @@ def follow_remote(
                 continue
             seen.add(path)
             with open(path, "rb") as source:
-                source.seek(offsets[kind])
+                if offsets[kind] is None:
+                    source.seek(0, os.SEEK_END)
+                else:
+                    source.seek(offsets[kind])
                 while True:
                     data = source.read(65536)
                     if not data:
