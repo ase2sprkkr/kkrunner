@@ -1,6 +1,5 @@
 """Backend-independent execution library with lazy root-level conveniences."""
 
-from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,17 +10,6 @@ if TYPE_CHECKING:
     from kkrunner.runs.processing import ProcessingPending
     from kkrunner.runs.records import RunStore
 
-_EXPORTS = {
-    "__version__": "kkrunner._version",
-    "TaskFile": "kkrunner.files.task_file",
-    "ExecutionOutcome": "kkrunner.runs.base",
-    "ExecutionSpec": "kkrunner.runs.base",
-    "RunState": "kkrunner.runs.base",
-    "RunManager": "kkrunner.runs.manager",
-    "ProcessingPending": "kkrunner.runs.processing",
-    "RunStore": "kkrunner.runs.records",
-}
-
 __all__ = [
     "ExecutionOutcome", "ExecutionSpec", "ProcessingPending",
     "RunManager", "RunState", "RunStore", "TaskFile", "__version__",
@@ -29,13 +17,27 @@ __all__ = [
 
 
 def __getattr__(name):
-    module = _EXPORTS.get(name)
-    if module is None:
+    if name == "__version__":
+        from ._version import __version__ as value
+    elif name == "TaskFile":
+        from .files.task_file import TaskFile as value
+    elif name in (
+        "ExecutionOutcome",
+        "ExecutionSpec",
+        "RunState",
+    ):
+        from .runs import base
+        value = getattr(base, name)
+    elif name == "RunManager":
+        from .runs.manager import RunManager as value
+    elif name == "ProcessingPending":
+        from .runs.processing import ProcessingPending as value
+    elif name == "RunStore":
+        from .runs.records import RunStore as value
+    else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module(module), name)
     globals()[name] = value
     return value
-
 
 def __dir__():
     return sorted(set(globals()) | set(__all__))

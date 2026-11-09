@@ -18,17 +18,22 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="strong directory fsy
 
 def test_durable_write_orders_file_fsync_before_replace_and_directory_fsync(tmp_path, monkeypatch):
     path = tmp_path / "state.json"
+    from threading import get_ident
+
+    owner_thread = get_ident()
     events = []
     real_fsync = durability.os.fsync
     real_replace = durability.os.replace
 
     def tracked_fsync(descriptor):
         kind = "directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file"
-        events.append(("fsync", kind))
+        if get_ident() == owner_thread:
+            events.append(("fsync", kind))
         return real_fsync(descriptor)
 
     def tracked_replace(source, destination):
-        events.append(("replace", Path(destination).name))
+        if get_ident() == owner_thread:
+            events.append(("replace", Path(destination).name))
         return real_replace(source, destination)
 
     monkeypatch.setattr(durability.os, "fsync", tracked_fsync)
