@@ -23,14 +23,13 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
         run: test "$REF_TYPE" = tag
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Check tag, package version and master ancestry
+      - name: Check tag matches the package version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           PYTHONPATH: ''
@@ -58,7 +57,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: python-distributions
           path: dist/

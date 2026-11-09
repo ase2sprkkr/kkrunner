@@ -130,7 +130,7 @@ CLI; [development](docs/development.rst) covers builds and releases. Generated
 API pages and HTML are not committed. CI validates documentation against the
 installed wheel and uploads the HTML artifact. The separate documentation
 workflow checks the same wheel and documentation, omits the runtime test
-matrices, and deploys to GitHub Pages for `v*` tags or manual runs. Enable
+matrices, and deploys to GitHub Pages when a release is published or on manual runs. Enable
 **Settings → Pages → Build and deployment → GitHub Actions** and allow release
 tags and manually selected source branches in the `github-pages` environment
 deployment rules.
