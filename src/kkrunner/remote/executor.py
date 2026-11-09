@@ -648,6 +648,37 @@ class RemoteEndpointExecutor(Executor):
     def create_managed_run(self, spec, *, run_id, callback=None):
         return self._context(self, spec.launch).create_run(spec, callback=callback, run_id=run_id)
 
+    async def _snapshot_file(self, run, file, *, destination=None):
+        """Observe target-side content without affecting normal result downloads."""
+        self._validate_run(run)
+        context = self._context(self, self._launch_from_manifest(run.files))
+        _relative_local_path(file, context.local_root)
+        entry = next(
+            (item for item in (
+                run.files.stdout, run.files.stderr, *run.files.outputs,
+                *(cache.file for cache in run.files.caches),
+            ) if item is not None and item.local_path == file),
+            None,
+        )
+        remote = entry.remote_path if entry is not None else None
+        if remote is None:
+            remote = await context.map_path(file)
+        root = await context._resolved_remote_root()
+        normalized = posixpath.normpath(remote)
+        if not posixpath.isabs(normalized) or posixpath.commonpath((root, normalized)) != root:
+            raise ValueError(f"Remote snapshot path is outside mapped root: {remote}")
+        # Also reject remote symlinks that escape the mapped filesystem root.
+        # query_files checks real path containment without requiring a stable file.
+        observed = await self.transport.query_files([normalized], root=root)
+        if not observed or observed[0]["status"] == "missing":
+            raise FileNotFoundError(normalized)
+        if observed[0]["type"] != "file":
+            raise ValueError(f"Snapshot source is not a regular file: {normalized}")
+        return await self.transport.snapshot_file(normalized, destination=destination)
+
+    def snapshot_file(self, run, file, *, destination=None):
+        return _run_sync(self._snapshot_file(run, file, destination=destination))
+
     async def _fetch_result_files(self, run, files, *, destinations=None):
         self._validate_run(run)
         context = self._context(self, self._launch_from_manifest(run.files))

@@ -651,6 +651,30 @@ class RunManager:
         )
         return self._process_outcome(record, outcome, process_result, retry=True)
 
+    def snapshot_file(self, run, file, *, destination=None):
+        """Read current bytes of a declared output/cache, regardless of run state.
+
+        The calculation may be writing concurrently: this is an observational
+        copy, not a consistent version. Destination copies never replace run
+        files or affect persistent artifact metadata.
+        """
+        from kkrunner.files.paths import file_path, has_file_magic
+        from kkrunner.files.snapshots import matching_file, check_destination
+
+        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
+        if record.execution.backend_id is None:
+            raise RuntimeError(f"Run {record.id} has not been submitted")
+        selected = file.local_path if hasattr(file, "local_path") else file
+        path = file_path(selected, record.execution.directory.local, required=True)
+        if has_file_magic(path):
+            raise ValueError("Snapshot requires one concrete file, not a wildcard")
+        entry = matching_file(record.files, path)
+        if entry is None:
+            raise ValueError(f"File is not a declared output or cache: {path}")
+        if destination is not None:
+            destination = check_destination(record.files, path, destination)
+        return self.executor_for(record).snapshot_file(record, path, destination=destination)
+
     def retrieve_result_files(self, run):
         record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
         if not record.state.is_terminal:
@@ -947,6 +971,10 @@ class PersistentRunner:
             # The completed observer cannot overwrite a newer refresh.
             return self._record.state
         return self._record.state if self._record.state.is_terminal else state
+
+    def snapshot_file(self, file, *, destination=None):
+        """Obtain currently readable bytes or a separate local copy."""
+        return self.manager.snapshot_file(self.id, file, destination=destination)
 
     def add_output_listener(self, callback):
         return self._runner.add_output_listener(callback)
