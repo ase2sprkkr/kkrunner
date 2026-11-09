@@ -103,3 +103,36 @@ Historical applications should verify captured files before interpreting them.
 was replaced. A missing required local output is an ``ARTIFACTS`` failure;
 a failed remote transfer is a ``DOWNLOAD`` failure. Optional missing outputs
 are recorded as skipped.
+
+Read files during a running calculation
+----------------------------------------
+
+``RunManager.snapshot_file(run, file)`` reads the currently visible contents
+of a declared output, saved stdout/stderr stream, or cache. It works while the
+calculation is running and after completion. A ``PersistentRunner`` also offers
+``run.snapshot_file(file)``.
+
+.. code-block:: python
+
+   current_bytes = run.snapshot_file("progress.dat")
+   copy_path = run.snapshot_file(
+       "progress.dat", destination="/tmp/progress-snapshot.dat",
+   )
+
+The selected file is given using the **local** working-directory namespace,
+including for remote runs. A wildcard declaration may select an existing
+concrete filename, but the snapshot request must name one file. Inputs or
+undeclared paths cannot be read through this API.
+
+Without ``destination``, the result is ``bytes``, which loads the contents
+into memory. With ``destination``, the result is a ``pathlib.Path``; files
+are streamed to a temporary destination and atomically published on success.
+Snapshot destinations must not overlap declared run files. The original
+files, persisted run state, availability and historical checksums are not
+modified. The remote source is read **on the execution host**, independently
+of any local output already synchronized.
+
+**A snapshot is not a consistent point-in-time copy.** The producer may
+continue appending or rewriting while it is being read. This observational
+API intentionally differs from the verified, terminal-only
+``retrieve_result_files()`` and final output synchronization.

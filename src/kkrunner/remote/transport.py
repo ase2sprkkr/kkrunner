@@ -13,6 +13,7 @@ from typing import Optional, Protocol
 from uuid import uuid4
 
 from kkrunner.files.queries import _sources, checked_files, expand_local_files, local_file_signature, query_files
+from kkrunner.files.snapshots import snapshot_destination
 from kkrunner.files.versions import file_digest
 from kkrunner.remote.protocol import json_request
 
@@ -73,6 +74,14 @@ class Transport:
 
     async def read_file(self, path):
         raise NotImplementedError
+
+    async def snapshot_file(self, source, *, destination=None):
+        """Read a changing file, bypassing the stable-result download contract."""
+        if destination is None:
+            return await self.read_file(source)
+        with snapshot_destination(destination) as out:
+            out.write(await self.read_file(source))
+        return Path(destination)
 
     async def file_digest(self, path):
         """Return the SHA-256 digest of *path*, or ``None`` if it does not exist."""
@@ -178,6 +187,14 @@ class LocalTransport(Transport):
 
     async def read_file(self, path):
         return await asyncio.to_thread(Path(path).read_bytes)
+
+    async def snapshot_file(self, source, *, destination=None):
+        if destination is None:
+            return await self.read_file(source)
+        with snapshot_destination(destination) as out:
+            with open(source, "rb") as current:
+                await asyncio.to_thread(shutil.copyfileobj, current, out)
+        return Path(destination)
 
     async def file_digest(self, path):
         return await asyncio.to_thread(file_digest, path, missing_ok=True)
@@ -295,6 +312,17 @@ class SshTransport(Transport):
             except OSError:
                 pass
             raise
+
+    async def snapshot_file(self, source, *, destination=None):
+        if destination is None:
+            return await self.read_file(source)
+        command = self._command(("cat", "--", os.fspath(source)))
+        with snapshot_destination(destination) as out:
+            process = await asyncio.create_subprocess_exec(
+                *command, stdout=out, stderr=asyncio.subprocess.PIPE
+            )
+            await _completed_process(process, command)
+        return Path(destination)
 
     async def query_files(self, sources, *, root=None, digest=False):
         results = await json_request(

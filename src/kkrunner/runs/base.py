@@ -665,6 +665,13 @@ class Executor:
         """
         raise NotImplementedError(f"{type(self).__name__} cannot retrieve persistent result files")
 
+    def snapshot_file(self, run, file, *, destination=None):
+        """Read a local file while running, without altering canonical results."""
+        if run.execution.directory.remote is not None:
+            raise NotImplementedError(f"{type(self).__name__} cannot snapshot remote files")
+        from kkrunner.files.snapshots import local_snapshot
+        return local_snapshot(file, destination=destination)
+
     def submission_directory(self, spec: ExecutionSpec) -> str:
         return os.path.abspath(os.fspath(spec.directory))
 
