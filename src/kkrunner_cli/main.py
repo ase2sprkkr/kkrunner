@@ -64,6 +64,10 @@ def user_parser(argument_parser):
     """Add only interactive status, follow and cancel actions to another CLI."""
     parser(argument_parser, user=True)
 
+def user_parser(argument_parser):
+    """Add only interactive status, follow and cancel actions to another CLI."""
+    parser(argument_parser, user=True)
+
 def _print_json(value):
     print(json.dumps(value), flush=True)
 
