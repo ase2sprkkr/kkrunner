@@ -9,11 +9,10 @@ import tempfile
 from pathlib import Path
 
 import kkrunner
-from kkrunner import ExecutionSpec, ProcessingPending, RunState
-from kkrunner.runs import LaunchSpec
-from kkrunner.backends import LocalExecutor
-from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
-from kkrunner.projects import ProjectExecutionManager, ProjectRepository
+from kkrunner import ExecutionSpec, ProcessingPending, Run, RunState
+from kkrunner.backends import DirectBackend, SupervisedBackend
+from kkrunner.client import EndpointClient, SshTransport, StagingSpec
+from kkrunner.projects import ProjectRunManager, ProjectRepository
 
 assert not os.environ.get("PYTHONPATH")
 assert importlib.util.find_spec("ase") is None
@@ -24,7 +23,8 @@ for module in pkgutil.walk_packages(kkrunner.__path__, kkrunner.__name__ + "."):
 assert md.version("kkrunner") == kkrunner.__version__
 
 root = Path(tempfile.mkdtemp(prefix="kkrunner-distribution-"))
-raw = LocalExecutor().create_run(
+raw = Run.untracked(
+    EndpointClient(DirectBackend),
     ExecutionSpec(
         [sys.executable, "-c", "print(42)"],
         directory=root,
@@ -36,9 +36,9 @@ assert (root / "raw.out").read_text() == "42\n"
 
 projects = ProjectRepository(root / "projects")
 project = projects.create("Wheel review", directory=root)
-manager = ProjectExecutionManager(project_repository=projects, project=project)
+manager = ProjectRunManager(project_repository=projects, project=project)
 run = manager.create_run(
-    LocalExecutor(),
+    EndpointClient(SupervisedBackend),
     ExecutionSpec(
         [sys.executable, "-c", "print(43)"],
         directory=root,
@@ -51,7 +51,7 @@ try:
 except ProcessingPending:
     pass
 assert manager.store.get(run.id).state == RunState.POSTPROCESSING
-restarted = ProjectExecutionManager(project_repository=projects, project=project)
+restarted = ProjectRunManager(project_repository=projects, project=project)
 attached = restarted.attach(run.id, process_result=lambda outcome: int(Path(outcome.output_file).read_text()))
 assert attached.wait() == 43
 assert restarted.store.get(run.id).state == RunState.FINISHED
@@ -59,22 +59,34 @@ assert restarted.store.get(run.id).state == RunState.FINISHED
 local, remote = root / "local", root / "remote"
 local.mkdir()
 remote.mkdir()
-executor = RemoteEndpointExecutor(LocalTransport(), command=(str(Path(sys.executable).parent / "kkrunner"),))
-run = executor.create_run(
+class LoopbackSshTransport(SshTransport):
+    """Run SSH target commands locally using the real operation protocol."""
+
+    def __init__(self):
+        super().__init__("loopback", python_command=(sys.executable,))
+
+    def _command(self, argv, cwd=None):
+        assert cwd is None
+        return tuple(argv)
+
+
+client = EndpointClient(DirectBackend, transport=LoopbackSshTransport())
+run = Run.untracked(client,
     ExecutionSpec(
         [sys.executable, "-c", "print(44)"],
         directory=local,
         output_file="remote.out",
-        launch=LaunchSpec(local_root=local, remote_root=remote),
+        staging=StagingSpec(local_root=local, remote_root=remote),
     )
 )
 assert run.run().return_code == 0
 assert (local / "remote.out").read_text() == "44\n"
 commands = {entry.name for entry in md.distribution("kkrunner").entry_points if entry.group == "console_scripts"}
-assert commands == {"kkrunner"}, commands
+assert commands == {"kkrunner", "kkrunner-agent"}, commands
 assert importlib.util.find_spec("kkrunner_cli") is not None
-for arguments in (("--help",), ("status", "--help")):
-    subprocess.run([str(Path(sys.executable).parent / "kkrunner"), *arguments], check=True, stdout=subprocess.DEVNULL)
+for command in ("kkrunner", "kkrunner-agent"):
+    for arguments in (("--help",), ("status", "--help")):
+        subprocess.run([str(Path(sys.executable).parent / command), *arguments], check=True, stdout=subprocess.DEVNULL)
 print(
     json.dumps(
         {
@@ -82,7 +94,7 @@ print(
             "module": kkrunner.__file__,
             "raw": "ok",
             "managed_reconnect": "ok",
-            "remote_executable": "ok",
+            "ssh_loopback_execution": "ok",
             "without_ase": True,
         }
     )

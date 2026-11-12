@@ -7,7 +7,7 @@ from kkrunner.runs.manager import RunManager
 from kkrunner.runs.records import RunStore
 
 
-class ProjectExecutionManager(RunManager):
+class ProjectRunManager(RunManager):
     """Track a run only when it belongs to an existing project.
 
     All projects share the projects_runs/ RunStore. Each RunRecord contains
@@ -19,7 +19,7 @@ class ProjectExecutionManager(RunManager):
         self,
         store=None,
         *,
-        executor_pool=None,
+        client_pool=None,
         submitting_grace=60.0,
         project_repository=None,
         project=None,
@@ -34,7 +34,7 @@ class ProjectExecutionManager(RunManager):
             store = RunStore(self.projects.directory.parent / "projects_runs")
         super().__init__(
             store,
-            executor_pool=executor_pool,
+            client_pool=client_pool,
             submitting_grace=submitting_grace,
         )
 
@@ -56,7 +56,7 @@ class ProjectExecutionManager(RunManager):
             return self
         return type(self)(
             store=self.store,
-            executor_pool=self.executor_pool,
+            client_pool=self.client_pool,
             submitting_grace=self.submitting_grace,
             project_repository=self.projects,
             project=current,
@@ -64,7 +64,7 @@ class ProjectExecutionManager(RunManager):
 
     def create_run(
         self,
-        executor,
+        client,
         spec,
         *,
         process_result=None,
@@ -73,17 +73,21 @@ class ProjectExecutionManager(RunManager):
         callback=None,
         run_id=None,
         project=None,
+        detached=None,
+        owned_resources=None,
     ):
         manager = self if project is None else self.for_project(project)
         if manager.project_id is None:
             raise ValueError("A tracked run must belong to an existing project")
         return RunManager.create_run(
             manager,
-            executor,
+            client,
             spec,
             process_result=process_result,
             metadata=metadata,
             processing_required=processing_required,
             callback=callback,
             run_id=run_id,
+            detached=detached,
+            owned_resources=owned_resources,
         )

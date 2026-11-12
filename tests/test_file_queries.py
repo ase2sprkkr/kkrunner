@@ -11,7 +11,7 @@ import sys
 import pytest
 
 from kkrunner.files import queries
-from kkrunner.remote.transport import LocalTransport
+from kkrunner.client.transports import LocalTransport
 
 from .test_transport import _LoopbackSshTransport
 
@@ -100,7 +100,8 @@ def test_ssh_combines_globs_and_metadata_in_one_request(tmp_path):
     assert len(items) == 3
     assert all(item["mtime_ns"] == os.stat(item["path"]).st_mtime_ns for item in items)
     assert len(calls) == 1
-    assert calls[0][-1] == "query-files"
+    assert calls[0][1] == "-c"
+    assert "def query_files(" in calls[0][2]
 
 
 @pytest.mark.parametrize("factory", [LocalTransport, _LoopbackSshTransport])
@@ -136,17 +137,16 @@ def test_ssh_single_file_transfer_preserves_nanoseconds_and_atomic_publication(t
     asyncio.run(check())
 
 
-def test_remote_endpoint_reuses_configured_file_service_command():
-    from kkrunner.backends.endpoint import create_executor_from_endpoint, endpoint_for_executor
-    from kkrunner.remote.executor import RemoteEndpointExecutor
-    from kkrunner.remote.transport import SshTransport
+def test_remote_endpoint_reuses_configured_target_python_command():
+    from kkrunner.client import EndpointClient, SshTransport
+    from kkrunner.backends.config import BackendConfig
 
-    command = (sys.executable, "-m", "kkrunner")
-    transport = SshTransport("host")
-    executor = RemoteEndpointExecutor(transport, command=command)
-    assert transport.command == executor.command == command
-    restored = create_executor_from_endpoint(endpoint_for_executor(executor))
-    assert restored.transport.command == restored.command == command
+    command = (sys.executable,)
+    transport = SshTransport("host", python_command=command)
+    client = EndpointClient(transport=transport)
+    assert client.transport.python_command == command
+    restored = EndpointClient.from_config(transport.to_dict(), client.backend_config)
+    assert restored.transport.python_command == command
 
 
 def test_special_file_metadata_does_not_open_fifo(tmp_path):
@@ -198,19 +198,19 @@ def test_cache_preparation_batches_patterns_and_exact_metadata(tmp_path):
         Observed(),
         declared_cache_files=tuple(workdir / name for name in ("*.pot", "*.cache", "exact", "missing")),
     )
-    runner = executor.create_run(spec)
+    files = executor.create_run_parts(spec).files
     try:
-        asyncio.run(runner._prepare_cache_files({}, FileManifest.from_spec(spec)))
-        remote = remote_root / "calculation"
+        asyncio.run(files._prepare_cache_files({}, FileManifest.from_spec(spec)))
+        local = workdir
         assert calls == [
             (
-                (str(remote / "*.pot"), str(remote / "*.cache"), str(remote / "exact"), str(remote / "missing")),
-                str(remote_root),
+                (str(local / "*.pot"), str(local / "*.cache"), str(local / "exact"), str(local / "missing")),
+                str(local.parent),
             ),
         ]
-        assert len(runner._cache_before) == 3
-        assert runner._cache_targets[str(workdir / "exact")][1] == queries.local_file_signature(remote / "exact")
-        assert runner._cache_targets[str(workdir / "missing")][1] is None
+        assert len(files._cache_before) == 3
+        assert files._cache_targets[str(workdir / "exact")][1] == queries.local_file_signature(local / "exact")
+        assert files._cache_targets[str(workdir / "missing")][1] is None
     finally:
         spec.input_file.close()
         spec.output_file.close()

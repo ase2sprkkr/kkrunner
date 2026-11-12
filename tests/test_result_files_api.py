@@ -1,31 +1,21 @@
-"""Public terminology and capabilities for persistent result files."""
+"""Public result-file terminology and client ownership."""
 
-from kkrunner.runs import Executor
+from kkrunner.client import EndpointClient, LocalTransport, SshTransport
+from kkrunner.backends import PsijBackend
 from kkrunner.files import FileManifest, FileState
 
 
 def test_result_file_names_use_canonical_public_api():
-    record = FileManifest()
-    assert record.state is FileState.CURRENT
+    manifest = FileManifest()
+    assert manifest.state is FileState.CURRENT
     assert FileState.CURRENT.value == "current"
     assert FileState.OVERWRITTEN.value == "overwritten"
 
 
-def test_result_file_retrieval_capability_is_inferred_from_override():
-
-    class PlainExecutor(Executor):
-        pass
-
-    class RetrievingExecutor(Executor):
-        def fetch_result_files(self, run, files):
-            pass
-
-    class DerivedRetrievingExecutor(RetrievingExecutor):
-        pass
-
-    assert PlainExecutor.supports_result_file_retrieval is False
-    assert PlainExecutor().supports_result_file_retrieval is False
-    assert RetrievingExecutor.supports_result_file_retrieval is True
-    assert RetrievingExecutor().supports_result_file_retrieval is True
-    assert DerivedRetrievingExecutor.supports_result_file_retrieval is True
-    assert DerivedRetrievingExecutor().supports_result_file_retrieval is True
+def test_result_file_retrieval_is_owned_by_shared_client():
+    local = EndpointClient(PsijBackend, transport=LocalTransport())
+    remote = EndpointClient(PsijBackend, transport=SshTransport("cluster"))
+    assert local.supports_result_file_retrieval is True
+    assert remote.supports_result_file_retrieval is True
+    assert callable(local.fetch_result_files)
+    assert callable(remote.fetch_result_files)

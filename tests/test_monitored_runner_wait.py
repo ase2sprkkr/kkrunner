@@ -1,15 +1,16 @@
-"""Shared monitor waiting contract for local-project and remote runners."""
+"""Shared monitor waiting contract for local-process and remote backend jobs."""
 
 import asyncio
 
 import pytest
 
-from kkrunner.backends.local_managed import ManagedLocalRunner
-from kkrunner.remote.runner import RemoteRunner
+from kkrunner.client.job import Job
+from kkrunner.client.backend_execution import DirectExecution
+from kkrunner.client.transports import LocalTransport
+from kkrunner.backends import DirectBackend
 from kkrunner.runs.base import ExecutionSpec, RunState
 
 
-@pytest.mark.parametrize("runner_class", (ManagedLocalRunner, RemoteRunner))
 @pytest.mark.parametrize(
     "state, message",
     (
@@ -19,18 +20,19 @@ from kkrunner.runs.base import ExecutionSpec, RunState
         (RunState.FINISHED, "Attached run has not been started"),
     ),
 )
-def test_wait_without_started_monitor_fails_immediately(tmp_path, runner_class, state, message):
-    spec = ExecutionSpec(argv=(), input_file=None, output_file=None, directory=str(tmp_path))
-    runner = runner_class(None, spec, state=state)
+def test_wait_without_started_monitor_fails_immediately(tmp_path, state, message):
+    spec = ExecutionSpec(argv=(), directory=str(tmp_path))
+    job = Job(DirectExecution(DirectBackend(), LocalTransport()), spec)
+    job._state = state
     with pytest.raises(RuntimeError, match=message):
-        runner.wait()
+        job.wait()
 
 
-@pytest.mark.parametrize("runner_class", (ManagedLocalRunner, RemoteRunner))
-def test_wait_and_run_async_return_completed_monitor_result(tmp_path, runner_class):
-    spec = ExecutionSpec(argv=(), input_file=None, output_file=None, directory=str(tmp_path))
-    runner = runner_class(None, spec)
-    runner._thread = object()
-    runner._done.set()
-    assert runner.wait() is runner.result
-    assert asyncio.run(runner.run_async()) is runner.result
+def test_wait_and_run_async_return_completed_monitor_result(tmp_path):
+    spec = ExecutionSpec(argv=(), directory=str(tmp_path))
+    job = Job(DirectExecution(DirectBackend(), LocalTransport()), spec)
+    job._state = RunState.FINISHED
+    job._thread = object()
+    job._done.set()
+    assert job.wait() is job.result
+    assert asyncio.run(job.run_async()) is job.result

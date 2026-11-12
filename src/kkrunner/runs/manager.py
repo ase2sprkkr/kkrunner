@@ -2,30 +2,32 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from uuid import uuid4
 
-from kkrunner.backends.endpoint import ExecutorEndpoint, endpoint_for_executor
-from kkrunner.backends.pool import default_executor_pool
-from kkrunner.files.manifest import ArtifactAvailabilityState, FileManifest
-from kkrunner.files.paths import expand_local_candidates, has_file_magic
-from kkrunner.files.versions import FileState, FileVersion, file_digest
-from kkrunner.runs.base import Executor, FailurePhase, RunState, RunStatus, SubmissionNotStarted
+from kkrunner.backends.config import BackendConfig
+from kkrunner.backends.contracts import BackendCapability, RecoveryDisposition
+from kkrunner.client.contracts import JobAttachment
+from kkrunner.client.pool import default_client_pool
+from kkrunner.client.transports import (
+    LocalTransport,
+    SshTransport,
+    require_persistable_transport,
+)
+from kkrunner.files.manifest import FileManifest
+from kkrunner.files.versions import FileState
+from kkrunner.runs.base import ExecutionSpec, FailurePhase, RunState, RunStatus
 from kkrunner.runs.conflicts import submission_conflicts
-from kkrunner.runs.model import Execution, WorkingDirectory
-from kkrunner.runs.processing import PostprocessingRunner, ProcessingPending
+from kkrunner.runs.files import RunFiles, capture_result_files, file_is_current, sync_result_files
+from kkrunner.runs.model import ExecutionMetadata, WorkingDirectory
+from kkrunner.runs.processing import ProcessingPending
 from kkrunner.runs.records import RunRecord
-from kkrunner.support.durability import sync_file
-
-
-class HistoricalFileMismatchError(OSError):
-    """Restored contents differ from a run's captured SHA-256 digest."""
-
 
 _STATE_RANK = {
     RunState.NEW: 0,
@@ -42,6 +44,7 @@ _UNCHANGED = object()
 _NO_ARTIFACTS_FAILURES = {
     FailurePhase.SUBMISSION,
     FailurePhase.LAUNCH,
+    FailurePhase.OUTPUT,
     FailurePhase.ARTIFACTS,
     FailurePhase.DOWNLOAD,
 }
@@ -56,10 +59,6 @@ def _timestamp(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
-
-
-def _unique(values):
-    return tuple(dict.fromkeys(value for value in values if value is not None))
 
 
 def _failure_phase(value):
@@ -82,122 +81,86 @@ class DuplicateSubmissionError(RuntimeError):
 class RunManager:
     """Persist public run lifecycle without task-specific knowledge."""
 
-    def __init__(self, store=None, *, executor_pool=None, submitting_grace=60.0):
+    _default_override = ContextVar("kkrunner_default_run_manager", default=None)
+    _default_lock = Lock()
+    _fallback = None
+
+    @classmethod
+    def get_default(cls):
+        """Return a context-selected manager or a stable user-level manager."""
+        selected = RunManager._default_override.get()
+        if selected is not None:
+            return selected
+        with RunManager._default_lock:
+            if RunManager._fallback is None:
+                from kkrunner.runs.records import RunStore
+                root = os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")
+                RunManager._fallback = RunManager(RunStore(Path(root) / "kkrunner" / "runs"))
+            return RunManager._fallback
+
+    @classmethod
+    @contextmanager
+    def as_default(cls, manager):
+        """Select a manager for the current context without affecting other contexts."""
+        if not isinstance(manager, RunManager):
+            raise TypeError("Default manager must be a RunManager")
+        token = RunManager._default_override.set(manager)
+        try:
+            yield manager
+        finally:
+            RunManager._default_override.reset(token)
+
+    def __init__(self, store=None, *, client_pool=None, submitting_grace=60.0):
         if submitting_grace < 0:
             raise ValueError("submitting_grace must be non-negative")
         self.store = store
-        self.executor_pool = executor_pool if executor_pool is not None else default_executor_pool()
+        self.client_pool = client_pool if client_pool is not None else default_client_pool()
+        self._files = RunFiles(store=self.store, client_pool=self.client_pool)
         self._ack_lock = Lock()
         self._acknowledged_results = set()
         self.submitting_grace = float(submitting_grace)
 
-    def register_executor(self, executor: Executor, endpoint=None):
-        endpoint = endpoint or endpoint_for_executor(executor)
-        self.executor_pool.get(endpoint, lambda: executor)
-        return endpoint
+    def register_client(self, client):
+        key = (require_persistable_transport(client.transport), client.backend_config)
+        self.client_pool.get(key, lambda: client)
+        return key
 
-    def executor_for(self, record):
-        return self.executor_pool.for_endpoint(record.execution.endpoint)
-
-    @staticmethod
-    def _concrete_result_files(manifests):
-        paths = []
-        seen = set()
-        for manifest in manifests:
-            for path in expand_local_candidates(manifest):
-                path = os.path.abspath(path)
-                if path in seen or not os.path.isfile(path):
-                    continue
-                seen.add(path)
-                paths.append(path)
-        return tuple(paths)
-
-    @classmethod
-    def _result_files_snapshot(cls, manifests, *, sync=False):
-        versions = []
-        for path in cls._concrete_result_files(manifests):
-            if sync:
-                sync_file(path)
-            versions.append(FileVersion.capture(path, require_digest=True))
-        return tuple(sorted(versions, key=lambda value: os.fspath(value.path)))
-
-    @classmethod
-    def _sync_result_files(cls, manifests):
-        for path in cls._concrete_result_files(manifests):
-            sync_file(path)
-
-    @classmethod
-    def _file_is_current(cls, result_files, path, versions):
-        if result_files is None or path is None:
-            return False
-        path = os.path.abspath(path)
-        if result_files.captured_at is None:
-            return os.path.isfile(path)
-        for version in versions:
-            if os.path.abspath(os.fspath(version.path)) == path:
-                return version.is_current()
-        return False
-
-    @staticmethod
-    def _missing_result_files(result_files):
-        if result_files is None:
-            return ()
-        if result_files.captured_at is not None:
-            return tuple(
-                os.fspath(item.path) for item in result_files.all_versions if item.state() is FileState.MISSING
-            )
-
-        missing = []
-        for manifest in result_files.manifests:
-            if has_file_magic(manifest):
-                if not expand_local_candidates(manifest):
-                    missing.append(manifest)
-            elif not os.path.isfile(manifest):
-                missing.append(manifest)
-        return _unique(missing)
-
-    def _capture_result_files(self, result_files):
-        if result_files is None or result_files.captured_at is not None:
-            return result_files
-        from kkrunner.files.availability import discover_local_files
-
-        captured = replace(
-            result_files,
-            input_versions=self._result_files_snapshot(result_files.input_files),
-            output_versions=self._result_files_snapshot(result_files.output_files, sync=True),
-            captured_at=_now(),
-        )
-        return discover_local_files(captured)
+    def client_for(self, record):
+        return self.client_pool.for_config(record.execution.transport, record.execution.backend)
 
     def input_file_is_current(self, run):
-        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
-        result_files = record.files
-        return self._file_is_current(
-            result_files,
-            None if result_files is None else result_files.input_file,
-            () if result_files is None else result_files.input_versions,
-        )
+        """Whether the local primary input matches its captured version."""
+        return self._files.input_file_is_current(run)
 
     def output_file_is_current(self, run):
-        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
-        result_files = record.files
-        return self._file_is_current(
-            result_files,
-            None if result_files is None else result_files.output_file,
-            () if result_files is None else result_files.output_versions,
-        )
+        """Whether the local primary output matches its captured version."""
+        return self._files.output_file_is_current(run)
+
+    def update_artifact_availability(self, record, path, state, message=None):
+        """Persist artifact availability independently of the run outcome."""
+        return self._files.update_artifact_availability(record, path, state, message)
+
+    def snapshot_file(self, run, file, *, destination=None):
+        """Copy a declared output or cache as currently visible, without updating history."""
+        return self._files.snapshot_file(run, file, destination=destination)
+
+    def retrieve_result_files(self, run):
+        """Restore missing results, verifying captured digests before replacement."""
+        return self._files.retrieve_result_files(run)
 
     def new_record(
         self,
         *,
         directory,
-        endpoint=None,
+        transport=None,
+        backend=None,
         remote_directory=None,
         files=None,
         run_id=None,
         project_id=None,
         metadata=None,
         processing_required=False,
+        submission_key=None,
     ):
         now = _now()
         local = os.path.abspath(os.fspath(directory))
@@ -208,7 +171,12 @@ class RunManager:
             updated_at=now,
             metadata={} if metadata is None else metadata,
             processing_required=processing_required,
-            execution=Execution(endpoint or ExecutorEndpoint(), WorkingDirectory(local, remote_directory)),
+            execution=ExecutionMetadata(
+                LocalTransport() if transport is None else transport,
+                WorkingDirectory(local, remote_directory),
+                submission_key=submission_key,
+                backend=backend or BackendConfig(),
+            ),
             files=files if files is not None else FileManifest(),
             project_id=project_id,
         )
@@ -261,6 +229,12 @@ class RunManager:
         expected_processing_attempt=None,
     ):
         def merge(latest):
+            if latest.state == RunState.POSTPROCESSING and expected_processing_attempt is None:
+                # An external observation cannot complete or fail a run after
+                # its processor has claimed ownership. This check must live
+                # inside the RunStore update lock; checking before transition
+                # leaves a race between refresh and the processing claim.
+                return latest
             if expected_processing_attempt is not None and (
                 latest.processing_attempt != expected_processing_attempt or latest.state != RunState.POSTPROCESSING
             ):
@@ -288,6 +262,8 @@ class RunManager:
             if execution is not _UNCHANGED and execution is not None:
                 if latest.execution.backend_id is not None and execution.backend_id != latest.execution.backend_id:
                     raise ValueError("Backend identity cannot change")
+                if execution.submission_key != latest.execution.submission_key:
+                    raise ValueError("Submission key cannot change")
                 changes["execution"] = execution
             if return_code is not _UNCHANGED and return_code is not None:
                 if not final_locked or latest.return_code is None:
@@ -309,19 +285,6 @@ class RunManager:
 
         return self.store.update(record, merge)
 
-    def update_artifact_availability(self, record, path, state, message=None):
-        """Persist availability of one artifact without changing the run outcome."""
-        state = ArtifactAvailabilityState(state)
-
-        def update(latest):
-            return replace(
-                latest,
-                updated_at=_now(),
-                files=latest.files.with_file_availability(path, state.value, message),
-            )
-
-        return self.store.update(record, update)
-
     def _is_stale_submitting(self, record, *, now=None):
         if record.state != RunState.SUBMITTING or record.execution.backend_id is not None:
             return False
@@ -332,17 +295,53 @@ class RunManager:
         record = self.store.get(record.id)
         if not self._is_stale_submitting(record):
             return record
-        executor = self.executor_for(record)
+        client = self.client_for(record)
+        if not hasattr(client, "recover_submission"):
+            # A tracked direct process has no durable backend identity. Keep
+            # uncertainty rather than claiming that no process was launched.
+            return self.transition(
+                record, state=RunState.UNKNOWN,
+                message="Submission recovery is not supported by this client",
+            )
+        from kkrunner.runs.model import WorkingDirectory
         try:
-            status = executor.recover_submission(
-                record.id,
-                record,
+            from kkrunner.client.contracts import SubmissionContext
+            recovery = client.recover_submission(
+                record.execution.submission_key or record.id,
+                SubmissionContext(record.execution),
                 submitted_at=record.updated_at,
             )
         except NotImplementedError:
             return record
-        if status is not None:
-            return self.update(record, status)
+        if recovery.disposition is RecoveryDisposition.FOUND:
+            config = record.execution.transport
+            if recovery.ref.backend != record.execution.backend.name:
+                raise ValueError("Recovered job belongs to a different backend")
+            execution = record.execution.submitted(recovery.ref.token)
+            if recovery.directory is not None and recovery.directory != execution.directory.target:
+                execution = replace(
+                    execution,
+                    directory=WorkingDirectory(execution.directory.local, recovery.directory),
+                )
+            files = record.files
+            if isinstance(config, SshTransport):
+                files = files.with_remote_stream_paths(
+                    stdout=recovery.output_file, stderr=recovery.error_file,
+                )
+            # Persist identity and stream paths before asking the backend for
+            # status. A failed observation must not lose the recovered identity.
+            attached = self.transition(record, execution=execution, files=files)
+            return self.update(
+                attached,
+                client.status(JobAttachment(attached.execution, attached.files))[0],
+            )
+        if recovery.disposition is RecoveryDisposition.UNSUPPORTED:
+            return self.transition(
+                record, state=RunState.UNKNOWN,
+                message=recovery.message or "Submission recovery is not supported by this client",
+            )
+        if recovery.disposition is not RecoveryDisposition.ABSENT:
+            return record
 
         def mark_absent(latest):
             if latest.state != RunState.SUBMITTING or latest.execution.backend_id is not None:
@@ -376,7 +375,7 @@ class RunManager:
                 )
                 if not conflicts:
                     if record.files is not None:
-                        self._sync_result_files(record.files.input_files)
+                        sync_result_files(record.files.input_files)
                     return self.transition(
                         record,
                         state=RunState.SUBMITTING,
@@ -398,23 +397,54 @@ class RunManager:
             if not progressed:
                 raise DuplicateSubmissionError(record, conflicts)
 
+    @staticmethod
+    def _observed_run_state(record, status):
+        from kkrunner.runs.states import project_run_state
+        return project_run_state(status.state,
+                                 files_pending=isinstance(record.execution.transport, SshTransport),
+                                 processing_pending=record.processing_required,
+                                 failure_phase=status.failure_phase)
+
     def update(self, record, status: RunStatus):
+        # Backend refresh is observational. It cannot retract local processing
+        # or a terminal result, including when a scheduler returns stale data.
+        latest = self.store.get(record.id)
+        if latest.state.is_terminal or latest.state == RunState.POSTPROCESSING:
+            return latest
+        record = latest
+        if (
+            isinstance(record.execution.transport, LocalTransport)
+            and status.state.is_terminal and status.files is None
+        ):
+            # Backend status contains execution facts only. The client-side
+            # manifest projection owns streams and application artifacts.
+            from kkrunner.files.availability import local_manifest
+            status = replace(status, files=local_manifest(record.files, status))
         phase = _failure_phase(status.failure_phase)
         return_code = status.return_code
-        state = (
-            (RunState.POSTPROCESSING if record.processing_required else RunState.FINISHED)
-            if status.state == RunState.FINISHED
-            else status.state
-        )
+        state = self._observed_run_state(record, status)
         execution = status.execution
         if execution is None and status.backend_id is not None:
             execution = record.execution.submitted(status.backend_id)
-        if status.state == RunState.FINISHED:
+        elif execution is not None and record.execution.submission_key is not None:
+            # A backend reports execution facts, not the client submission
+            # ticket. Preserve our original ticket, but reject disagreement.
+            if execution.submission_key is None:
+                execution = replace(
+                    execution, submission_key=record.execution.submission_key,
+                )
+            elif execution.submission_key != record.execution.submission_key:
+                raise ValueError("Backend status returned another submission key")
+        if state in (RunState.FINISHED, RunState.POSTPROCESSING):
+            result_files = status.files if status.files is not None else record.files
+            if record.execution.directory.remote is None and result_files is not None:
+                from kkrunner.files.availability import discover_local_files
+                result_files = discover_local_files(result_files)
             updated = self.complete(
                 record,
                 state=state,
                 execution=execution,
-                files=status.files if status.files is not None else record.files,
+                files=result_files,
                 return_code=return_code,
                 message=status.message,
                 failure_phase=phase,
@@ -430,7 +460,7 @@ class RunManager:
                 message=status.message,
                 failure_phase=phase,
             )
-        self._acknowledge_submission(self.executor_for(updated), updated)
+        self._acknowledge_submission(self.client_for(updated), updated)
         self._acknowledge_result(updated)
         return updated
 
@@ -465,7 +495,7 @@ class RunManager:
 
         if artifacts_available and result_files is not None:
             try:
-                result_files = self._capture_result_files(result_files)
+                result_files = capture_result_files(result_files)
             except OSError as exc:
                 state = RunState.FAILED
                 phase = FailurePhase.ARTIFACTS
@@ -570,7 +600,7 @@ class RunManager:
             manifest = latest.files if files is None else files
             if latest.files.captured_at is not None:
                 manifest = latest.files
-            manifest = self._capture_result_files(manifest)
+            manifest = capture_result_files(manifest)
             if manifest.failed_artifacts:
                 raise OSError(manifest.availability_message or "Output artifacts unavailable")
             if any(v.state() is not FileState.CURRENT for v in manifest.output_versions):
@@ -643,140 +673,13 @@ class RunManager:
             raise ValueError("Postprocessing retry requires captured artifacts")
         outcome = ExecutionOutcome(
             input_file=(
-                files.input_file if self._file_is_current(files, files.input_file, files.input_versions) else None
+                files.input_file if file_is_current(files, files.input_file, files.input_versions) else None
             ),
             output_file=files.output_file,
             error_file=None if files.stderr is None else files.stderr.local_path,
             return_code=record.return_code,
         )
         return self._process_outcome(record, outcome, process_result, retry=True)
-
-    def cancel_run(self, run):
-        """Request backend cancellation without taking ownership of the run monitor."""
-        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
-        if record.state.is_terminal:
-            return {"state": record.state.value, "return_code": record.return_code,
-                    "error": record.message}
-        if record.execution.backend_id is None:
-            raise RuntimeError(f"Run {record.id} has no backend reference")
-        return self.executor_for(record).cancel_run(record)
-
-    def follow_output(self, run, stdout, stderr, *, from_start=False):
-        """Read existing stream bytes without invoking attach or postprocessing."""
-        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
-        if record.state.is_terminal:
-            # A completed job may have acknowledged its backend terminal receipt.
-            # Its persisted local files are authoritative and can be replayed.
-            if from_start:
-                seen = set()
-                for entry, destination in ((record.files.stdout, stdout), (record.files.stderr, stderr)):
-                    if entry is None or entry.local_path is None:
-                        continue
-                    path = os.fspath(entry.local_path)
-                    if path in seen:
-                        continue
-                    seen.add(path)
-                    with open(path, "rb") as source:
-                        while chunk := source.read(65536):
-                            destination.write(chunk)
-                            destination.flush()
-            return {"state": record.state.value, "return_code": record.return_code,
-                    "error": record.message}
-        if record.execution.backend_id is None:
-            raise RuntimeError(f"Run {record.id} has no backend reference")
-        return self.executor_for(record).follow_output(
-            record, stdout, stderr, from_start=from_start,
-        )
-
-    def snapshot_file(self, run, file, *, destination=None):
-        """Read current bytes of a declared output/cache, regardless of run state.
-
-        The calculation may be writing concurrently: this is an observational
-        copy, not a consistent version. Destination copies never replace run
-        files or affect persistent artifact metadata.
-        """
-        from kkrunner.files.paths import file_path, has_file_magic
-        from kkrunner.files.snapshots import matching_file, check_destination
-
-        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
-        if record.execution.backend_id is None:
-            raise RuntimeError(f"Run {record.id} has not been submitted")
-        selected = file.local_path if hasattr(file, "local_path") else file
-        path = file_path(selected, record.execution.directory.local, required=True)
-        if has_file_magic(path):
-            raise ValueError("Snapshot requires one concrete file, not a wildcard")
-        entry = matching_file(record.files, path)
-        if entry is None:
-            raise ValueError(f"File is not a declared output or cache: {path}")
-        if destination is not None:
-            destination = check_destination(record.files, path, destination)
-        return self.executor_for(record).snapshot_file(record, path, destination=destination)
-
-    def retrieve_result_files(self, run):
-        record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
-        if not record.state.is_terminal:
-            raise RuntimeError(f"Run {record.id} is not finished")
-
-        missing = self._missing_result_files(record.files)
-        if not missing or record.execution.backend_id is None:
-            return record
-
-        executor = self.executor_for(record)
-        if not executor.supports_result_file_retrieval:
-            return record
-
-        versions = {
-            os.path.abspath(os.fspath(version.path)): version
-            for version in (() if record.files is None else record.files.all_versions)
-        }
-        for path in missing:
-            path = os.path.abspath(os.fspath(path))
-            version = versions.get(path)
-            staged = (
-                Path(path).with_name(f".{Path(path).name}.{uuid4().hex}.tmp")
-                if version is not None and version.digest is not None
-                else None
-            )
-            try:
-                if staged is None:
-                    executor.fetch_result_files(record, (path,))
-                else:
-                    executor.fetch_result_files(
-                        record,
-                        (path,),
-                        destinations={path: os.fspath(staged)},
-                    )
-                    if not staged.is_file():
-                        raise FileNotFoundError(f"Historical artifact was not retrieved: {path}")
-                    if file_digest(staged) != version.digest:
-                        raise HistoricalFileMismatchError(f"Historical result files have been overwritten: {path}")
-                    os.replace(staged, path)
-            except OSError as exc:
-                self.update_artifact_availability(
-                    record,
-                    path,
-                    ArtifactAvailabilityState.FAILED,
-                    str(exc),
-                )
-                raise
-            finally:
-                if staged is not None:
-                    staged.unlink(missing_ok=True)
-            refreshed = self.store.get(record.id)
-            if path in self._missing_result_files(refreshed.files):
-                record = self.update_artifact_availability(
-                    refreshed,
-                    path,
-                    ArtifactAvailabilityState.FAILED,
-                    "Historical artifact is still missing",
-                )
-            else:
-                record = self.update_artifact_availability(
-                    refreshed,
-                    path,
-                    ArtifactAvailabilityState.AVAILABLE,
-                )
-        return record
 
     def _acknowledge_result(self, record):
         """Best-effort ACK after durable completion; failed ACKs remain retryable."""
@@ -791,10 +694,8 @@ class RunManager:
             if key in self._acknowledged_results:
                 return True
             try:
-                executor = self.executor_for(record)
-                acknowledge = getattr(executor, "acknowledge", None)
-                if acknowledge is not None:
-                    acknowledge(record)
+                client = self.client_for(record)
+                client.acknowledge(record)
             except (OSError, RuntimeError, ValueError, NotImplementedError):
                 return False
             self._acknowledged_results.add(key)
@@ -805,83 +706,50 @@ class RunManager:
         return tuple(record.id for record in self.store.runs(active=False) if self._acknowledge_result(record))
 
     @staticmethod
-    def _acknowledge_submission(executor, record):
-        """Discard the temporary backend PID only after RunStore is durable."""
+    def _acknowledge_submission(client, record):
+        """Discard the submission receipt only after RunStore is durable."""
         if record.execution.backend_id is None:
             return
-        acknowledge = getattr(executor, "acknowledge_submission", None)
-        if acknowledge is not None:
-            try:
-                acknowledge(record)
-            except (OSError, RuntimeError):
-                # The receipt remains recoverable until a subsequent refresh.
-                pass
-
-    @staticmethod
-    def _complete(persistent_run, result, callback):
-        persistent_run._sync_completion(result)
-        if (
-            persistent_run.record.state == RunState.FINISHED
-            and persistent_run.record.processing_required
-            and persistent_run._runner.state != RunState.FINISHED
-        ):
-            # Another observer finished while this one lost backend observation.
-            # Completion notification must not substitute a raw application result.
-            result = None
-            persistent_run._runner.result = None
-        if callback is not None:
-            # Completion of observation, including UNKNOWN, is notification.
-            # It is not proof that the backend calculation finished.
-            callback(result)
+        try:
+            client.acknowledge_submission(record)
+        except (OSError, RuntimeError):
+            # The receipt remains recoverable until a subsequent refresh.
+            pass
 
     def create_run(
-        self,
-        executor,
-        spec,
-        *,
-        process_result=None,
-        metadata=None,
-        processing_required=None,
-        callback=None,
-        run_id=None,
+        self, client, spec, *, process_result=None, metadata=None,
+        processing_required=None, callback=None, run_id=None, detached=None,
+        owned_resources=None,
     ):
-        """Create a persistent run from raw execution plus generic processing."""
+        """Create one tracked Run through the configured client."""
+        from kkrunner.runs.run import Run
+        if isinstance(spec, ExecutionSpec):
+            spec.require_complete()
         if processing_required is False and process_result is not None:
             raise ValueError("A result callback requires processing_required=True")
-        endpoint = endpoint_for_executor(executor)
+        config = require_persistable_transport(client.transport)
         record = self.new_record(
             metadata=metadata,
             processing_required=(process_result is not None if processing_required is None else processing_required),
             directory=spec.directory,
-            endpoint=endpoint,
-            remote_directory=(executor.submission_directory(spec) if endpoint.executor == "ssh" else None),
+            transport=config,
+            backend=client.backend_config,
+            remote_directory=(None if config.is_local else client.submission_directory(spec)),
             files=FileManifest.from_spec(spec),
             run_id=run_id,
+            submission_key=uuid4().hex,
         )
-        self.register_executor(executor, endpoint)
-
-        raw = executor.create_managed_run(spec, run_id=record.id)
-        # The manifest is owned by RunRecord. Local execution observes its
-        # publication outcomes, without persisting an independent file list.
-        set_manifest = getattr(raw, "set_manifest", None)
-        if set_manifest is not None:
-            set_manifest(record.files)
-        processor = None
-        if record.processing_required:
-
-            def processor(outcome):
-                return self._process_outcome(
-                    record,
-                    outcome,
-                    process_result,
-                    files=getattr(raw, "files", None),
-                    execution=(getattr(raw, "execution", None) or record.execution.submitted(raw.backend_id)),
-                )
-
-        processed = PostprocessingRunner(raw, processor)
-        persistent_run = PersistentRunner(self, executor, processed, record)
-        processed.callback = lambda result: self._complete(persistent_run, result, callback)
-        return persistent_run
+        self.register_client(client)
+        parts = client.create_run_parts(
+            spec, submission_key=record.execution.submission_key,
+        )
+        parts.configure_detached(
+            client.default_detached if detached is None else detached,
+        )
+        return Run(
+            parts.job, client=client, manager=self, record=record,
+            process_result=process_result, callback=callback, parts=parts, owned_resources=owned_resources,
+        )
 
     def refresh(self, records=None):
         self.reconcile_acknowledgements()
@@ -889,309 +757,73 @@ class RunManager:
         current = {record.id: record for record in records}
         groups = {}
         for record in records:
-            if record.execution.backend_id is None:
+            if record.execution.backend_id is None and self._is_stale_submitting(record):
+                record = self.recover_submitting(record)
+                current[record.id] = record
+            if record.execution.backend_id is None or record.state.is_terminal:
+                # Recovery may have completed this record and acknowledged
+                # its backend receipt. Do not immediately observe it again.
                 continue
-            executor = self.executor_for(record)
-            groups.setdefault(executor, []).append(record)
+            if record.state == RunState.POSTPROCESSING:
+                # Execution has already completed and the client owns the
+                # processing attempt. Re-querying backend status could
+                # overwrite local processing state with a stale failure.
+                continue
+            client = self.client_for(record)
+            groups.setdefault(client, []).append(record)
 
-        for executor, group in groups.items():
-            statuses = executor.status(*group)
+        for client, group in groups.items():
+            if BackendCapability.STATUS not in client.backend.supports:
+                # Direct Jobs have no independently queryable durable status.
+                # Their client-side completion thread remains authoritative;
+                # never infer FINISHED from a PID or a closed SSH channel.
+                for record in group:
+                    current[record.id] = self.transition(
+                        record, state=RunState.UNKNOWN,
+                        message="Direct execution has no independent recovery status",
+                    )
+                continue
+            statuses = client.status(
+                *(JobAttachment(record.execution, record.files) for record in group)
+            )
             if len(statuses) != len(group):
-                raise RuntimeError("Executor returned wrong number of run statuses")
+                raise RuntimeError("Transport returned wrong number of run statuses")
             for record, status in zip(group, statuses):
                 current[record.id] = self.update(record, status)
         return tuple(current[record.id] for record in records)
 
     def attach(
-        self,
-        run,
-        *,
-        process_result=None,
-        executor=None,
-        callback=None,
-        output_listener=None,
+        self, run, *, process_result=None, client=None,
+        callback=None, output_listener=None, owned_resources=None,
     ):
-        """Attach raw execution, then resume client-side postprocessing."""
+        """Open a tracked Run without resubmitting its backend job."""
+        from kkrunner.runs.run import Run
         record = self.store.get(run) if isinstance(run, str) else self.store.get(run.id)
         if record.state.is_terminal:
-            raise RuntimeError("Run is already terminal; load its historical result or use an explicit retry")
+            raise RuntimeError("Run is already terminal; use explicit retry")
         if process_result is not None and not record.processing_required:
-            raise ValueError("This run did not request postprocessing")
+            raise ValueError("This Run did not request postprocessing")
         if record.execution.backend_id is None:
             raise RuntimeError(f"Run {record.id} has no backend reference")
-        if executor is None:
-            executor = self.executor_for(record)
-        else:
-            endpoint = record.execution.endpoint
-            self.register_executor(executor, endpoint)
-
-        raw = executor.attach(
-            record,
+        client = self.client_for(record) if client is None else client
+        self.register_client(client)
+        if BackendCapability.REATTACH not in client.backend.supports:
+            from kkrunner.backends.contracts import UnsupportedCapability
+            raise UnsupportedCapability("This backend does not support reattachment")
+        parts = client.open_run_parts(
+            JobAttachment(record.execution, record.files),
             output_listener=output_listener,
-            start=False,
         )
-        processor = None
-        if record.processing_required:
-
-            def processor(outcome):
-                return self._process_outcome(
-                    record,
-                    outcome,
-                    process_result,
-                    files=getattr(raw, "files", None),
-                    execution=(getattr(raw, "execution", None) or record.execution.submitted(raw.backend_id)),
-                )
-
-        processed = PostprocessingRunner(raw, processor)
-        persistent_run = PersistentRunner(self, executor, processed, record)
-        processed.callback = lambda result: self._complete(persistent_run, result, callback)
-        persistent_run.start()
-        return persistent_run
-
-
-class PersistentRunner:
-    """Caller-owned runner that persists the public lifecycle directly."""
-
-    def __init__(self, manager, executor, runner, record):
-        self.manager = manager
-        self.executor = executor
-        self._runner = runner
-        self._record = record
-        self._completion_lock = Lock()
-        self._completion_persisted = False
-        self._monitor_record_version = record.updated_at
-
-    @property
-    def id(self):
-        return self._record.id
-
-    @property
-    def record(self):
-        return self._record
-
-    @property
-    def result(self):
-        return self._runner.result
-
-    @property
-    def backend_id(self):
-        return self._runner.backend_id
-
-    @property
-    def execution(self):
-        proposed = getattr(self._runner, "execution", None)
-        if proposed is not None:
-            return proposed
-        if self.backend_id is None:
-            return None
-        return self._record.execution.submitted(self.backend_id)
-
-    @property
-    def files(self):
-        return getattr(self._runner, "files", None)
-
-    @property
-    def exception(self):
-        return self._runner.exception
-
-    @property
-    def failure_phase(self):
-        return _failure_phase(getattr(self._runner, "failure_phase", None))
-
-    @property
-    def state(self):
-        """Observe runner state without persisting a transition."""
-        state = self._runner.state
-        if state == RunState.NEW and self._record.state != RunState.NEW:
-            return self._record.state
-        if state == RunState.UNKNOWN and self._record.state != RunState.NEW:
-            # The completed observer cannot overwrite a newer refresh.
-            return self._record.state
-        return self._record.state if self._record.state.is_terminal else state
-
-    def snapshot_file(self, file, *, destination=None):
-        """Obtain currently readable bytes or a separate local copy."""
-        return self.manager.snapshot_file(self.id, file, destination=destination)
-
-    def add_output_listener(self, callback):
-        return self._runner.add_output_listener(callback)
-
-    def add_output_error_listener(self, callback):
-        return self._runner.add_output_error_listener(callback)
-
-    def submit(self):
-        if self._record.state != RunState.NEW:
-            raise RuntimeError(f"Run is already {self._record.state.value}")
-        resolve = getattr(self.executor, "resolve_submission", None)
-        if resolve is not None:
-            self._record = resolve(self._record, self._runner.spec)
-        self._record = self.manager.reserve(self._record)
-        self._monitor_record_version = self._record.updated_at
         try:
-            prepare = getattr(self._runner, "prepare_submission", None)
-            if prepare is not None and prepare():
-                # Persist the exact staged file map and target directory before
-                # calling the backend. A lost submit reply can then be recovered
-                # without depending on live runner state.
-                self._record = self.manager.transition(
-                    self._record,
-                    execution=self.execution,
-                    files=self.files if self.files is not None else _UNCHANGED,
-                )
-                self._monitor_record_version = self._record.updated_at
-            result = self._runner.submit()
-        except SubmissionNotStarted as exc:
-            phase = self.failure_phase or FailurePhase.SUBMISSION
-            message = getattr(self._runner, "failure_message", None) or str(exc)
-            self._record = self.manager.complete(
-                self._record,
-                state=RunState.FAILED,
-                message=message,
-                failure_phase=phase,
-                artifacts_available=False,
+            attached = Run(
+                parts.job, client=client, manager=self, record=record,
+                process_result=process_result, callback=callback, parts=parts, owned_resources=owned_resources,
             )
-            raise
+            attached.start()
         except BaseException:
-            # No backend ID means submission may be uncertain. Keep SUBMITTING so
-            # recover_submitting() can resolve it instead of inventing failure.
-            backend_id = self.backend_id
-            if backend_id is not None:
-                self._record = self.manager.transition(
-                    self._record,
-                    state=self._runner.state,
-                    execution=self.execution,
-                    failure_phase=self.failure_phase,
-                )
+            # Opening an attachment transfers stream ownership to Run only
+            # once its observer has started. Do not leak file descriptors when
+            # constructing or starting the attached observer fails.
+            parts.abort()
             raise
-
-        backend_id = self.backend_id
-        if backend_id is None:
-            raise RuntimeError("Executor submit returned without a backend ID")
-        self.manager.register_executor(self.executor, self._record.execution.endpoint)
-        with self._completion_lock:
-            # A fast monitor may have already persisted an UNKNOWN or
-            # terminal result. Do not overwrite that result with an older
-            # status observed during submission.
-            if not self._completion_persisted:
-                self._record = self.manager.transition(
-                    self._record,
-                    state=self._runner.state,
-                    execution=self.execution,
-                    failure_phase=self.failure_phase,
-                    files=self.files if self.files is not None else _UNCHANGED,
-                )
-                self._monitor_record_version = self._record.updated_at
-        self.manager._acknowledge_submission(self.executor, self._record)
-        return result
-
-    def start(self):
-        self._runner.start()
-        with self._completion_lock:
-            # An attached PSI/J job can initially report NEW before the
-            # scheduler provides its actual state.
-            state = self._runner.state
-            if not self._completion_persisted and self.backend_id is not None and state != RunState.NEW:
-                self._record = self.manager.transition(
-                    self._record,
-                    state=state,
-                    execution=self.execution,
-                    failure_phase=self.failure_phase,
-                )
-                self._monitor_record_version = self._record.updated_at
-
-    def _sync_completion(self, result):
-        # Callback and wait() can reach this path concurrently. Only the
-        # first successful durable completion may publish and acknowledge it.
-        with self._completion_lock:
-            if self._completion_persisted:
-                return
-            latest = self.manager.store.get(self.id)
-            if latest.state.is_terminal:
-                self._record = latest
-                self._completion_persisted = True
-                self.manager._acknowledge_result(latest)
-                return
-            state = self._runner.state
-            phase = self.failure_phase
-            message = getattr(self._runner, "failure_message", None)
-            error = self._runner.exception
-            if message is None and error is not None:
-                message = str(error)
-            if state == RunState.UNKNOWN:
-                # The observer ended, not necessarily the calculation.
-                # No final artifact publication or completion timestamp.
-                self._record = self.manager.transition(
-                    self._record,
-                    state=state,
-                    execution=self.execution,
-                    message=message,
-                    expected_updated_at=self._monitor_record_version,
-                )
-                self._completion_persisted = True
-                return
-            if not state.is_terminal:
-                return
-            if state == RunState.FAILED and phase is None:
-                phase = FailurePhase.EXECUTION
-
-            artifacts_available = phase not in _NO_ARTIFACTS_FAILURES
-            self._record = self.manager.complete(
-                self._record,
-                state=state,
-                execution=self.execution,
-                return_code=getattr(self._runner, "return_code", None),
-                message=message,
-                failure_phase=phase,
-                artifacts_available=artifacts_available,
-                files=self.files,
-            )
-            if self._record.state.is_terminal:
-                self._completion_persisted = True
-
-    def wait(self):
-        try:
-            result = self._runner.wait()
-        finally:
-            if self._record.state != RunState.NEW:
-                self._sync_completion(self.result)
-        if (
-            self._record.state == RunState.FINISHED
-            and self._record.processing_required
-            and self._runner.state != RunState.FINISHED
-        ):
-            raise ProcessingPending("Result was processed by another observer; load its historical result")
-        return result
-
-    def run(self):
-        if self._record.state == RunState.NEW:
-            self.submit()
-        return self.wait()
-
-    async def run_async(self):
-        return await asyncio.to_thread(self.run)
-
-    def refresh(self):
-        with self._completion_lock:
-            self._record = self.manager.refresh((self._record,))[0]
-            return self._record
-
-    def stop_observation(self):
-        """Detach this client without cancelling its still-running job.
-
-        The completion callback persists a recoverable UNKNOWN observation.
-        Call wait() to ensure the monitor has finished and been detached.
-        """
-        return self._runner.stop_observation()
-
-    def cancel(self):
-        try:
-            return self._runner.cancel()
-        finally:
-            with self._completion_lock:
-                if self._record.state != RunState.NEW and not self._completion_persisted:
-                    self._record = self.manager.transition(
-                        self._record,
-                        state=self._runner.state,
-                        execution=self.execution,
-                        failure_phase=self.failure_phase,
-                    )
+        return attached

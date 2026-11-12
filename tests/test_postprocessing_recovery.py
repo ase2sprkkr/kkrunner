@@ -6,9 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from kkrunner import ExecutionOutcome, RunState, RunStore
-from kkrunner.runs import Executor, FailurePhase
+from kkrunner.runs import FailurePhase
+from kkrunner.client import EndpointClient
+from kkrunner.backends import SupervisedBackend
+from kkrunner.backends.contracts import JobStatus
+from kkrunner import ExecutionSpec
 from kkrunner.runs.manager import RunManager
-from kkrunner.runs.processing import ProcessingPending
 
 
 class _RawRunner:
@@ -19,10 +22,24 @@ class _RawRunner:
         self.exception = None
         self.failure_phase = None
         self.failure_message = None
+        self.output_error = None
 
     @property
     def return_code(self):
         return self.result.return_code
+
+    @property
+    def requires_stream_retrieval(self):
+        return False
+
+    def configure_detached(self, detached):
+        pass
+
+    def configure_submission(self, request, **observation):
+        pass
+
+    def status(self):
+        return JobStatus(self.state, return_code=self.return_code)
 
     def submit(self):
         self.backend_id = "job-1"
@@ -41,12 +58,22 @@ class _RawRunner:
         pass
 
 
-class _Executor(Executor):
-    name = "test"
+class _Executor(EndpointClient):
+    def __init__(self):
+        super().__init__(SupervisedBackend)
 
-    def create_managed_run(self, spec, *, run_id, callback=None):
+    def acknowledge_submission(self, record):
+        pass
+
+    def acknowledge(self, record):
+        pass
+
+    def create_run_parts(self, spec, *, submission_key=None, callback=None):
+        parts = super().create_run_parts(spec, submission_key=submission_key, callback=callback)
         self.runner = _RawRunner()
-        return self.runner
+        self.runner.spec = spec
+        parts.job = self.runner
+        return parts
 
 
 def test_finished_run_is_persisted_before_callback_without_wait(tmp_path):
@@ -55,7 +82,7 @@ def test_finished_run_is_persisted_before_callback_without_wait(tmp_path):
     finished = Event()
     run = manager.create_run(
         _Executor(),
-        SimpleNamespace(directory=str(tmp_path)),
+        ExecutionSpec(argv=("unused",), directory=str(tmp_path)),
         process_result=lambda outcome: outcome,
         callback=lambda result: finished.set(),
         metadata={"example": {"task": "DOS".upper()}},
@@ -77,7 +104,7 @@ def test_result_processor_failure_is_postprocessing_failure(tmp_path):
 
     run = manager.create_run(
         executor,
-        SimpleNamespace(directory=str(tmp_path)),
+        ExecutionSpec(argv=("unused",), directory=str(tmp_path)),
         process_result=fail,
         metadata={"example": {"task": "DOS".upper()}},
     )
@@ -105,7 +132,7 @@ def test_retry_does_not_overwrite_concurrent_record_update(tmp_path, during_retr
         processing_required=True,
     )
     record = manager.transition(
-        record, state=RunState.POSTPROCESSING, execution=record.execution.submitted("existing-backend")
+        record, state=RunState.RUNNING, execution=record.execution.submitted("existing-backend")
     )
     failed = manager.complete(
         record,
@@ -129,18 +156,12 @@ def test_retry_does_not_overwrite_concurrent_record_update(tmp_path, during_retr
             )
         return outcome
 
-    if during_retry == "refreshed":
-        manager.retry_postprocessing(failed.id, concurrent_change)
-    else:
-        with pytest.raises(ProcessingPending, match="no longer owns completion"):
-            manager.retry_postprocessing(failed.id, concurrent_change)
+    # A competing observer cannot replace the processing owner's state,
+    # even if it attempts to publish a terminal result mid-callback.
+    manager.retry_postprocessing(failed.id, concurrent_change)
     latest = manager.store.get(failed.id)
-    if during_retry == "refreshed":
-        assert latest.state == RunState.FINISHED
-        assert latest.message == "external refresh"
-    else:
-        assert latest.state == (RunState.FINISHED if during_retry == "finished" else RunState.FAILED)
-        assert latest.message == "external terminal update"
+    assert latest.state == RunState.FINISHED
+    assert latest.message is None
 
 
 def test_retry_exception_does_not_overwrite_concurrent_completion(tmp_path):
@@ -156,7 +177,7 @@ def test_retry_exception_does_not_overwrite_concurrent_completion(tmp_path):
         processing_required=True,
     )
     record = manager.transition(
-        record, state=RunState.POSTPROCESSING, execution=record.execution.submitted("existing-backend")
+        record, state=RunState.RUNNING, execution=record.execution.submitted("existing-backend")
     )
     failed = manager.complete(
         record,
@@ -172,11 +193,12 @@ def test_retry_exception_does_not_overwrite_concurrent_completion(tmp_path):
         )
         raise ValueError("parser error")
 
-    with pytest.raises(ProcessingPending, match="no longer owns completion"):
+    with pytest.raises(ValueError, match="parser error"):
         manager.retry_postprocessing(failed.id, interrupted)
     current = manager.store.get(failed.id)
-    assert current.state == RunState.FINISHED
-    assert current.message == "external success"
+    assert current.state == RunState.FAILED
+    assert current.failure_phase == FailurePhase.POSTPROCESSING
+    assert current.message == "parser error"
 
 
 @pytest.mark.parametrize("input_change", ("overwritten", "missing"))
@@ -196,7 +218,7 @@ def test_postprocessing_retry_accepts_unchanged_output_with_stale_input(tmp_path
         processing_required=True,
     )
     prepared = manager.transition(
-        record, state=RunState.POSTPROCESSING, execution=record.execution.submitted("existing-backend")
+        record, state=RunState.RUNNING, execution=record.execution.submitted("existing-backend")
     )
     failed = manager.complete(
         prepared,

@@ -8,8 +8,9 @@ from threading import Event
 import pytest
 
 from kkrunner import ExecutionSpec, RunState, RunStore
-from kkrunner.runs import LaunchSpec
-from kkrunner.remote import RemoteEndpointExecutor, SshTransport
+from kkrunner.client import StagingSpec, EndpointClient
+from kkrunner.client import SshTransport
+from kkrunner.backends import SupervisedBackend
 from kkrunner.runs.manager import RunManager
 
 pytestmark = pytest.mark.skipif(
@@ -68,24 +69,41 @@ def test_ssh_execution_detach_and_reconnect_without_application(docker_execution
                 "/opt/venv/bin/python",
                 "-c",
                 "\"import importlib.util; assert importlib.util.find_spec('ase') is None; "
-                "assert importlib.util.find_spec('ase2sprkkr') is None\"",
+                "assert importlib.util.find_spec('ase2sprkkr') is None; assert importlib.util.find_spec('kkrunner') is not None\"",
             ],
             check=True,
         )
         local = tmp_path / "work"
         local.mkdir()
         manager = RunManager(RunStore(tmp_path / "runs"))
-        executor = RemoteEndpointExecutor(SshTransport("tester@127.0.0.1", options=options))
+        executor = EndpointClient(
+            SupervisedBackend,
+            transport=SshTransport(
+                "tester@127.0.0.1", options=options,
+                python_command=("/opt/venv/bin/python",),
+            ),
+        )
         spec = ExecutionSpec(
             [
                 "/opt/venv/bin/python",
                 "-c",
-                "import time; from pathlib import Path; print('started',flush=True); time.sleep(2); Path('answer.txt').write_text('42'); print('done')",
+                # The job cannot finish before the second client attaches.
+                # Timing-only sleeps made the test race with a fast observer.
+                "from pathlib import Path\n"
+                "import time\n"
+                "print('started', flush=True)\n"
+                "deadline = time.monotonic() + 60\n"
+                "while not Path('release.txt').exists():\n"
+                "    if time.monotonic() >= deadline:\n"
+                "        raise RuntimeError('test never released the job')\n"
+                "    time.sleep(0.05)\n"
+                "Path('answer.txt').write_text('42')\n"
+                "print('done')\n",
             ],
             directory=local,
             output_file=local / "stdout.txt",
             output_files=(local / "answer.txt",),
-            launch=LaunchSpec(local_root=local, remote_root="/home/tester/jobs"),
+            staging=StagingSpec(local_root=local, remote_root="/home/tester/jobs"),
         )
         run = manager.create_run(executor, spec)
         first_output = Event()
@@ -96,10 +114,21 @@ def test_ssh_execution_detach_and_reconnect_without_application(docker_execution
         backend_id = run.backend_id
         run.stop_observation()
         run.wait()
+        # The job is deliberately blocked until attachment is established.
+        # A terminal RunRecord cannot be reattached, by design.
+        record = manager.store.get(run.id)
+        assert not record.state.is_terminal, record
         other = RunManager(RunStore(manager.store.directory))
-        attached = other.attach(run.id)
+        try:
+            attached = other.attach(run.id)
+        finally:
+            # Also release the waiting job if attachment raises unexpectedly.
+            subprocess.run(
+                ["ssh", *options, "tester@127.0.0.1", "touch /home/tester/jobs/release.txt"],
+                check=True,
+            )
         outcome = attached.wait()
-        assert outcome.return_code == 0, (attached.state, attached._runner.failure_message, other.store.get(run.id))
+        assert outcome.return_code == 0, (attached.state, attached.failure_message, other.store.get(run.id))
         assert attached.backend_id == backend_id
         assert other.store.get(run.id).state == RunState.FINISHED
         assert (local / "answer.txt").read_text() == "42"

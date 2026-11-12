@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from kkrunner.backends.local_process import stop_local_process
+from kkrunner.backends.support.process import stop_local_process
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Process-group signals require POSIX")

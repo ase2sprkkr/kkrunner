@@ -11,7 +11,7 @@ import sys
 import pytest
 
 from kkrunner.files.versions import FileVersion, file_digest
-from kkrunner.remote.transport import LocalTransport, SshTransport
+from kkrunner.client.transports import LocalTransport, SshTransport
 
 
 def test_local_transport_run_start_and_files(tmp_path):
@@ -144,7 +144,7 @@ def test_strict_transfer_refuses_wildcard_symlink_outside_source_root(tmp_path):
     import pytest
 
     from kkrunner.files.paths import expand_local_candidates
-    from kkrunner.remote.transport import expand_local_files
+    from kkrunner.files.queries import expand_local_files
 
     root = tmp_path / "root"
     root.mkdir()
@@ -164,7 +164,7 @@ class _LoopbackSshTransport(SshTransport):
     """Exercise the real SSH transfer implementation without an SSH server."""
 
     def __init__(self, *, zstd=False):
-        super().__init__("local-test", zstd=zstd, command=(sys.executable, "-m", "kkrunner"))
+        super().__init__("local-test", zstd=zstd, python_command=(sys.executable,))
 
     def _command(self, argv, cwd=None):
         assert cwd is None
@@ -356,7 +356,7 @@ def test_ssh_file_queries_distinguish_absence_and_errors(method, expected, statu
     class ProbedTransport(SshTransport):
         async def run(self, argv, *, cwd=None, input=None, check=True):
             calls.append((argv, json.loads(input), check))
-            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps([item]).encode(), stderr=b"")
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"version": 1, "result": [item]}).encode(), stderr=b"")
 
     query = getattr(ProbedTransport("example-host"), method)
     if status == "error":
@@ -364,14 +364,15 @@ def test_ssh_file_queries_distinguish_absence_and_errors(method, expected, statu
             asyncio.run(query(path))
     else:
         assert asyncio.run(query(path)) == (None if status == "missing" else expected)
-    assert calls == [
-        (
-            ("kkrunner", "--protocol-version", "1", "query-files"),
-            {"paths": [path], "root": None, "digest": method == "file_digest"},
-            True,
-        )
-    ]
-
+    assert len(calls) == 1
+    command, payload, checked = calls[0]
+    assert command[:2] == ("python3", "-c")
+    assert "def query_files(" in command[2]
+    assert payload == {
+        "args": [[path]],
+        "kwargs": {"root": None, "digest": method == "file_digest"},
+    }
+    assert checked is True
 
 def test_ssh_file_query_preserves_command_errors():
     class Failed(SshTransport):
@@ -412,16 +413,16 @@ def test_ssh_batch_tar_uses_explicit_compression_without_probing(tmp_path, zstd)
         assert ("--zstd" in consumer) is zstd
 
 
-def test_ssh_endpoint_compression_roundtrips_from_transport():
-    from kkrunner.backends.endpoint import create_executor_from_endpoint, endpoint_for_executor
-    from kkrunner.remote.executor import RemoteEndpointExecutor
+def test_ssh_client_compression_roundtrips_from_transport():
+    from kkrunner.client import EndpointClient
+    from kkrunner.backends import DirectBackend
 
     for compressed in (False, True):
-        endpoint = endpoint_for_executor(RemoteEndpointExecutor(SshTransport("cluster", zstd=compressed)))
-        assert endpoint.ssh_zstd is compressed
-        restored = create_executor_from_endpoint(endpoint)
+        client = EndpointClient(DirectBackend, transport=SshTransport("cluster", zstd=compressed))
+        assert client.transport.zstd is compressed
+        restored = EndpointClient.from_config(client.transport.to_dict(), client.backend_config)
+        assert restored.transport == client.transport
         assert restored.transport.zstd is compressed
-
 
 @pytest.mark.parametrize("factory", (LocalTransport, _LoopbackSshTransport))
 @pytest.mark.parametrize("check", (False, True))
@@ -468,16 +469,16 @@ def test_transport_run_uses_start_and_preserves_completion(factory, check, send_
 def test_ssh_upload_preserves_original_error_when_remote_cleanup_fails(tmp_path):
     source = tmp_path / "source.txt"
     source.write_bytes(b"payload")
-    transport = SshTransport("unused", ssh="/missing-kkrunner-ssh-executable")
     commands = []
 
-    async def fake_run(argv, *, cwd=None, input=None, check=True):
-        commands.append(tuple(argv))
-        if argv[0] == "rm":
-            raise OSError("cleanup connection unavailable")
-        return subprocess.CompletedProcess(argv, 0, b"", b"")
+    class FailingUpload(SshTransport):
+        async def run(self, argv, *, cwd=None, input=None, check=True):
+            commands.append(tuple(argv))
+            if argv[0] == "rm":
+                raise OSError("cleanup connection unavailable")
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
 
-    transport.run = fake_run
+    transport = FailingUpload("unused", ssh="/missing-kkrunner-ssh-executable")
 
     async def check():
         with pytest.raises(FileNotFoundError) as original:
@@ -489,14 +490,13 @@ def test_ssh_upload_preserves_original_error_when_remote_cleanup_fails(tmp_path)
 
 
 def test_ssh_download_preserves_original_error_when_temp_unlink_fails(tmp_path, monkeypatch):
-    from kkrunner.remote import transport as module
+    from kkrunner.client.transports import ssh as module
 
-    transport = SshTransport("unused", ssh="/missing-kkrunner-ssh-executable")
+    class UnavailableTransport(SshTransport):
+        async def file_signature(self, path):
+            return (5, 1000000000)
 
-    async def signature(path):
-        return (5, 1000000000)
-
-    transport.file_signature = signature
+    transport = UnavailableTransport("unused", ssh="/missing-kkrunner-ssh-executable")
     staged = tmp_path / "staged.tmp"
     cleanup_calls = []
 
@@ -518,3 +518,39 @@ def test_ssh_download_preserves_original_error_when_temp_unlink_fails(tmp_path, 
     asyncio.run(check())
     assert cleanup_calls == [True]
     assert not (tmp_path / "result").exists()
+
+
+def test_agent_ssh_uses_raw_portable_file_operations(tmp_path):
+    """File queries and upload publication must never invoke the agent."""
+    import asyncio
+    from kkrunner.files.versions import file_digest
+
+    transport = _LoopbackSshTransport()
+    transport.command = ("__must_not_invoke_agent__",)
+    source = tmp_path / "sample"
+    source.write_text("abc")
+    temporary = tmp_path / "stage"
+    destination = tmp_path / "published"
+    temporary.write_text("stored")
+    mtime_ns = 1729000000123456789
+
+    async def verify():
+        entries = await transport.query_files([str(source)], digest=True)
+        assert entries[0]["digest"] == file_digest(source)
+        await transport._finalize_upload(str(temporary), str(destination), mtime_ns)
+
+    asyncio.run(verify())
+    assert destination.read_text() == "stored"
+    assert destination.stat().st_mtime_ns == mtime_ns
+
+
+def test_ssh_client_retains_target_python_configuration():
+    from kkrunner.client import EndpointClient
+    from kkrunner.backends import DirectBackend
+
+    client = EndpointClient(
+        DirectBackend, transport=SshTransport("cluster", python_command=("python3.12",)),
+    )
+    assert client.transport.python_command == ("python3.12",)
+    restored = EndpointClient.from_config(client.transport.to_dict(), client.backend_config)
+    assert restored.transport == client.transport

@@ -5,24 +5,32 @@ from types import SimpleNamespace
 
 import pytest
 
-from kkrunner.backends.endpoint import endpoint_for_executor
-from kkrunner.files.manifest import FileManifest
-from kkrunner.remote.executor import RemoteEndpointExecutor
-from kkrunner.remote.transport import LocalTransport
-from kkrunner.runs.base import ExecutionSpec, LaunchSpec, RunState
-from kkrunner.runs.model import Execution, WorkingDirectory
-from kkrunner.runs.processing import PostprocessingRunner
+from kkrunner.backends import SupervisedBackend, PsijBackend
+from kkrunner.client import EndpointClient, SshTransport, StagingSpec
+from kkrunner.files.manifest import FileManifest, FileMapping
+from kkrunner.runs.base import ExecutionSpec, RunState
+from kkrunner.runs.model import ExecutionMetadata, WorkingDirectory
+from kkrunner.client.contracts import JobAttachment
+from kkrunner.runs.run import Run
 from kkrunner.runs.records import RunRecord
 
 
-def _executor(*, backend="local"):
-    return RemoteEndpointExecutor(
-        LocalTransport(), backend=backend, command=(sys.executable, "-m", "kkrunner")
-    )
+@pytest.fixture(autouse=True)
+def loopback_ssh(monkeypatch):
+    # Use a persistable SSH transport while exercising its wire commands locally.
+    def command(self, argv, cwd=None):
+        assert cwd is None
+        return tuple(argv)
+
+    monkeypatch.setattr(SshTransport, "_command", command)
+
+
+def _executor(*, backend=SupervisedBackend):
+    return EndpointClient(backend, transport=SshTransport("loopback", python_command=(sys.executable,)))
 
 
 def _launch(local_root, remote_root):
-    return LaunchSpec(local_root=local_root, remote_root=remote_root)
+    return StagingSpec(local_root=local_root, remote_root=remote_root)
 
 
 def _record(runner):
@@ -38,7 +46,7 @@ def _record(runner):
     )
 
 
-def _processed(raw):
+def _processed(raw, client):
 
     def process(outcome):
         return SimpleNamespace(
@@ -47,7 +55,7 @@ def _processed(raw):
             error=b"" if outcome.error_file is None else Path(outcome.error_file).read_bytes(),
         )
 
-    runner = PostprocessingRunner(raw, process)
+    runner = Run(raw.job, client=client, parts=raw, process_result=process)
     runner.start()
     return runner
 
@@ -87,15 +95,16 @@ def test_remote_executor_attach_reconnects_running_run_and_restores_stage_out(tm
         input_files=(input_file,),
         output_files=(output_file, generated),
         cache_files=(cache,),
-        launch=_launch(local_root, remote_root),
+        staging=_launch(local_root, remote_root),
     )
-    original_raw = first_executor.create_run(spec)
-    original = PostprocessingRunner(original_raw, lambda outcome: outcome)
+    original = Run.untracked(first_executor, spec, process_result=lambda outcome: outcome)
     original.submit()
     _wait_for_state(original, RunState.RUNNING)
     run = _record(original)
     assert run.execution.backend_id is not None
-    attached = _processed(_executor().attach(run, start=False))
+    executor = _executor()
+    attached_parts = executor.open_run_parts(JobAttachment(run.execution, run.files))
+    attached = _processed(attached_parts, executor)
     (remote_root / "calculation" / "release").write_text("go")
     assert attached.backend_id == run.execution.backend_id
     result = attached.wait()
@@ -106,7 +115,9 @@ def test_remote_executor_attach_reconnects_running_run_and_restores_stage_out(tm
     assert (workdir / "generated.dat").read_text() == "generated"
     assert (workdir / "cache.dat").read_text() == "after"
     assert original.wait().return_code == 0
-    finished_attached = _processed(_executor().attach(run, start=False))
+    executor = _executor()
+    finished_parts = executor.open_run_parts(JobAttachment(run.execution, run.files))
+    finished_attached = _processed(finished_parts, executor)
     finished_result = finished_attached.wait()
     assert finished_attached.state == RunState.FINISHED
     assert finished_attached.backend_id == run.execution.backend_id
@@ -133,13 +144,15 @@ def test_remote_executor_first_attach_after_completion_replays_finished_run(tmp_
         stdin=input_file,
         input_files=(input_file,),
         output_files=(output_file,),
-        launch=_launch(local_root, remote_root),
+        staging=_launch(local_root, remote_root),
     )
-    original = first_executor.create_run(spec)
+    original = Run.untracked(first_executor, spec)
     assert original.run().return_code == 0
     run = _record(original)
     assert run.execution.backend_id is not None
-    attached = _processed(_executor().attach(run, start=False))
+    executor = _executor()
+    attached_parts = executor.open_run_parts(JobAttachment(run.execution, run.files))
+    attached = _processed(attached_parts, executor)
     result = attached.wait()
     assert attached.state == RunState.FINISHED
     assert result.return_code == 0
@@ -154,22 +167,21 @@ def test_remote_executor_attach_rejects_reference_for_other_backend(tmp_path):
         state=RunState.RUNNING,
         created_at="2026-10-13T08:00:00+00:00",
         updated_at="2026-10-13T08:00:00+00:00",
-        execution=Execution(
-            endpoint_for_executor(_executor(backend="psij")),
+        execution=ExecutionMetadata(
+            executor.transport,
             WorkingDirectory(str(tmp_path), "/remote/calculation"),
             "job",
+            backend=_executor(backend=PsijBackend).backend_config,
         ),
         files=FileManifest(),
         metadata={"example": {"task": "SCF"}},
         processing_required=True,
     )
-    with pytest.raises(ValueError, match="different remote endpoint"):
-        executor.attach(run)
+    with pytest.raises(ValueError, match="different transport or backend"):
+        executor.open_run_parts(JobAttachment(run.execution, run.files))
 
 
 def test_remote_attach_preserves_existing_partial_stream(tmp_path, monkeypatch):
-    import asyncio
-
     from kkrunner.files.manifest import FileEntry
 
     local_root = tmp_path / "local"
@@ -179,25 +191,32 @@ def test_remote_attach_preserves_existing_partial_stream(tmp_path, monkeypatch):
     local_output = local_root / "run.out"
     local_output.write_bytes(b"partial")
     endpoint = _executor()
-    context = endpoint._context(endpoint, _launch(local_root, remote_root))
     run = RunRecord(
         id="partial",
         state=RunState.RUNNING,
         created_at="2026-10-13T08:00:00+00:00",
         updated_at="2026-10-13T08:00:00+00:00",
-        execution=Execution(
-            endpoint_for_executor(endpoint), WorkingDirectory(str(local_root), str(remote_root)), "opaque-handle"
+        execution=ExecutionMetadata(
+            endpoint.transport, WorkingDirectory(str(local_root), str(remote_root)), "opaque-handle",
+            backend=endpoint.backend_config
         ),
-        files=FileManifest(stdout=FileEntry(local_path=str(local_output), remote_path=str(remote_root / "run.out"))),
+        files=FileManifest(
+            stdout=FileEntry(local_path=str(local_output), remote_path=str(remote_root / "run.out")),
+            mapping=FileMapping(str(local_root), str(remote_root)),
+        ),
         metadata={"example": {"task": "SCF"}},
         processing_required=True,
     )
 
-    async def status(*args, **kwargs):
+    async def status(name, *args, **kwargs):
+        assert name == "status"
         return {"state": "running"}
 
-    monkeypatch.setattr(context, "_status", status)
-    runner = asyncio.run(context.attach(run, start=False))
-    assert runner.spec.output_file.tell() == len(b"partial")
-    runner.spec.output_file.close()
+    monkeypatch.setattr(endpoint, "_invoke", status)
+    parts = endpoint.open_run_parts(JobAttachment(run.execution, run.files))
+    assert parts.files.spec.is_partial
+    assert parts.files.spec.argv is None
+    assert parts.files.spec.output_file == str(local_output)
+    assert parts.files._streams.output_file.tell() == len(b"partial")
+    parts.files.close()
     assert local_output.read_bytes() == b"partial"

@@ -1,19 +1,27 @@
+from dataclasses import replace
 """Live snapshots do not disturb run artifacts or historical state."""
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from kkrunner import RunState, RunStore
-from kkrunner.backends import LocalExecutor
-from kkrunner.backends.endpoint import endpoint_for_executor
+from kkrunner.client import EndpointClient, LocalTransport, SshTransport
+from kkrunner.backends import SupervisedBackend
+from kkrunner.backends.config import BackendConfig
 from kkrunner.files.manifest import CacheEntry, FileEntry, FileManifest, FileMapping
-from kkrunner.remote import LocalTransport, RemoteEndpointExecutor
 from kkrunner.runs import RunManager
 
 from .test_transport import _LoopbackSshTransport
+
+
+@pytest.fixture(autouse=True)
+def loopback_remote_snapshots(monkeypatch):
+    # Check file mapping independently of an external SSH daemon.
+    monkeypatch.setattr(SshTransport, "query_files", LocalTransport.query_files)
+    monkeypatch.setattr(SshTransport, "snapshot_file", LocalTransport.snapshot_file)
+    monkeypatch.setattr(SshTransport, "read_file", LocalTransport.read_file)
 
 
 def running_run(tmp_path, remote=False, output="result.dat"):
@@ -22,13 +30,12 @@ def running_run(tmp_path, remote=False, output="result.dat"):
     local.mkdir(parents=True)
     if remote:
         target.mkdir(parents=True)
-        executor = RemoteEndpointExecutor(LocalTransport())
+        transport = SshTransport("loopback")
         mapping = FileMapping(str(local.parent), str(target.parent))
     else:
-        executor = LocalExecutor()
+        transport = LocalTransport()
         mapping = None
     manager = RunManager(RunStore(tmp_path / "history"))
-    manager.register_executor(executor)
     files = FileManifest(
         outputs=(FileEntry(str(local / output), str(target / output) if remote else None),),
         caches=(CacheEntry(FileEntry(str(local / "cache.bin"), str(target / "cache.bin") if remote else None)),),
@@ -37,7 +44,7 @@ def running_run(tmp_path, remote=False, output="result.dat"):
     )
     record = manager.new_record(
         directory=local, remote_directory=str(target) if remote else None,
-        endpoint=endpoint_for_executor(executor), files=files,
+        transport=transport, backend=BackendConfig("process"), files=files,
     )
     record = replace(record, state=RunState.RUNNING, execution=record.execution.submitted("job-123"))
     manager.store.save(record)
@@ -72,10 +79,13 @@ def test_snapshot_validates_declarations_and_submission(tmp_path):
         manager.snapshot_file(run, "result.dat")
     with pytest.raises(ValueError, match="concrete file"):
         manager.snapshot_file(run, "*.dat")
-    new = replace(run, state=RunState.NEW, execution=replace(run.execution, backend_id=None))
+    new = manager.new_record(
+        directory=local, transport=run.execution.transport, backend=run.execution.backend,
+        files=run.files, remote_directory=run.execution.directory.remote,
+    )
     manager.store.save(new)
     with pytest.raises(RuntimeError, match="not been submitted"):
-        manager.snapshot_file(run.id, "result.dat")
+        manager.snapshot_file(new.id, "result.dat")
 
 
 def test_snapshot_destination_cannot_overwrite_run_files(tmp_path):
@@ -139,7 +149,7 @@ def test_snapshot_runner_convenience(tmp_path):
 
     manager = RunManager(RunStore(tmp_path / "history"))
     run = manager.create_run(
-        LocalExecutor(),
+        EndpointClient(SupervisedBackend),
         ExecutionSpec([sys.executable, "-c", "print('done')"], directory=tmp_path, output_file="stdout.txt"),
     )
     run.run()

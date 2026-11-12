@@ -11,14 +11,69 @@ from __future__ import annotations
 
 import asyncio
 import json
-import struct
 
-from kkrunner.runs.base import RunState
+from kkrunner.execution import RunState
 
-STREAM_MAGIC = b"A2SSTRM1"
-_HEADER = struct.Struct("!cQ")
-_KIND_TO_CODE = {"out": b"O", "err": b"E"}
-_CODE_TO_KIND = {value: key for key, value in _KIND_TO_CODE.items()}
+def stream_protocol():
+    """Self-contained wire encoder, also delivered to targets without KKRunner."""
+    import json
+    import struct
+
+    class Protocol:
+        magic = b"A2SSTRM1"
+        header = struct.Struct("!cQ")
+        codes = {"out": b"O", "err": b"E", "started": b"S", "terminal": b"T"}
+
+        @classmethod
+        def encode(cls, kind, data):
+            if kind in ("started", "terminal"):
+                data = json.dumps(data, separators=(",", ":"), allow_nan=False).encode("utf8")
+            else:
+                data = bytes(data)
+            return cls.header.pack(cls.codes[kind], len(data)) + data
+
+    return Protocol
+
+
+_PROTOCOL = stream_protocol()
+STREAM_MAGIC = _PROTOCOL.magic
+_HEADER = _PROTOCOL.header
+_CODE_TO_KIND = {value: key for key, value in _PROTOCOL.codes.items()}
+
+
+class FramedSink:
+    """Write one calculation channel into the framed data stream."""
+
+    def __init__(self, stream, kind):
+        self.stream = stream
+        self.kind = kind
+
+    def write(self, data):
+        self.stream.write(encode_stream_frame(self.kind, data))
+
+    def flush(self):
+        self.stream.flush()
+
+
+async def follow_framed(follow, job_ref, **options):
+    """Deliver backend FOLLOW and its terminal outcome over one data channel.
+
+    Transport stderr is reserved for SSH diagnostics. No client file state
+    or native process lifetime is owned here.
+    """
+    import sys
+
+    output = sys.stdout.buffer
+    output.write(STREAM_MAGIC)
+    output.flush()
+    outcome = await follow(
+        job_ref,
+        FramedSink(output, "out"),
+        FramedSink(output, "err"),
+        **options,
+    )
+    output.write(encode_terminal_frame(outcome))
+    output.flush()
 
 
 class StreamProtocolError(RuntimeError):
@@ -26,17 +81,13 @@ class StreamProtocolError(RuntimeError):
 
 
 def encode_stream_frame(kind, data):
-    try:
-        code = _KIND_TO_CODE[kind]
-    except KeyError as exc:
-        raise ValueError(f"Unknown stream kind: {kind!r}") from exc
-    data = bytes(data)
-    return _HEADER.pack(code, len(data)) + data
+    if kind not in ("out", "err"):
+        raise ValueError(f"Unknown stream kind: {kind!r}")
+    return _PROTOCOL.encode(kind, data)
 
 
 def encode_terminal_frame(outcome):
-    data = json.dumps(outcome, separators=(",", ":")).encode("utf8")
-    return _HEADER.pack(b"T", len(data)) + data
+    return _PROTOCOL.encode("terminal", outcome)
 
 
 async def _read_exactly(source, size):
@@ -58,20 +109,27 @@ async def read_stream_frames(source):
             return
         rest = await _read_exactly(source, _HEADER.size - 1)
         code, size = _HEADER.unpack(first + rest)
-        if code == b"T":
+        if code in (b"T", b"S"):
             if size > 4096:
-                raise StreamProtocolError("Terminal frame is too large")
+                raise StreamProtocolError("Status frame is too large")
             try:
                 outcome = json.loads(await _read_exactly(source, size))
             except (ValueError, UnicodeError) as exc:
-                raise StreamProtocolError("Invalid terminal frame JSON") from exc
+                raise StreamProtocolError("Invalid status frame JSON") from exc
             if not isinstance(outcome, dict):
                 raise StreamProtocolError("Invalid terminal frame outcome")
             try:
                 RunState(outcome.get("state"))
             except (TypeError, ValueError) as exc:
                 raise StreamProtocolError("Invalid terminal frame outcome") from exc
-            yield "terminal", outcome
+            yield _CODE_TO_KIND[code], outcome
+            if code == b"S":
+                continue
+            # The terminal receipt ends the framed stream. Reading through
+            # EOF also prevents a misbehaving helper from blocking on a full
+            # pipe after sending the terminal frame.
+            if await source.read(1):
+                raise StreamProtocolError("Remote stream contains data after terminal frame")
             return
         if size > 65536:
             raise StreamProtocolError("Stream frame is too large")
@@ -80,75 +138,3 @@ async def read_stream_frames(source):
         except KeyError as exc:
             raise StreamProtocolError(f"Remote stream contains an unknown channel code: {code!r}") from exc
         yield kind, await _read_exactly(source, size)
-
-
-class FramedRunningCommand:
-    """Expose calculation streams from one framed transport command.
-
-    The wrapped process' stdout is the framed data channel. Its stderr is a
-    transport/control diagnostic channel and is deliberately never exposed as
-    calculation stderr.
-    """
-
-    def __init__(self, process, *, diagnostic_limit=65536):
-        self._process = process
-        self.stdout = asyncio.StreamReader()
-        self.stderr = asyncio.StreamReader()
-        self.returncode = None
-        self._diagnostic_limit = diagnostic_limit
-        self._diagnostics = bytearray()
-        self._protocol_error = None
-        self.terminal = None
-        self._frames_task = asyncio.create_task(self._demultiplex())
-        self._diagnostics_task = asyncio.create_task(self._drain_diagnostics())
-
-    @property
-    def diagnostics(self):
-        return bytes(self._diagnostics)
-
-    async def _demultiplex(self):
-        try:
-            async for kind, data in read_stream_frames(self._process.stdout):
-                if kind == "terminal":
-                    self.terminal = data
-                    continue
-                (self.stderr if kind == "err" else self.stdout).feed_data(data)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self._protocol_error = exc
-            try:
-                self._process.terminate()
-            except (ProcessLookupError, RuntimeError):
-                pass
-        finally:
-            self.stdout.feed_eof()
-            self.stderr.feed_eof()
-
-    async def _drain_diagnostics(self):
-        while True:
-            data = await self._process.stderr.read(65536)
-            if not data:
-                return
-            remaining = self._diagnostic_limit - len(self._diagnostics)
-            if remaining > 0:
-                self._diagnostics.extend(data[:remaining])
-
-    async def wait(self):
-        self.returncode = await self._process.wait()
-        await asyncio.gather(self._frames_task, self._diagnostics_task)
-        diagnostic = self.diagnostics.decode("utf8", errors="replace").strip()
-        if self._protocol_error is not None:
-            message = str(self._protocol_error)
-            if diagnostic:
-                message += f"; remote transport diagnostic: {diagnostic}"
-            raise StreamProtocolError(message) from self._protocol_error
-        if self.returncode != 0:
-            message = f"Remote stream helper exited with status {self.returncode}"
-            if diagnostic:
-                message += f"; remote transport diagnostic: {diagnostic}"
-            raise StreamProtocolError(message)
-        return self.returncode
-
-    def terminate(self):
-        return self._process.terminate()

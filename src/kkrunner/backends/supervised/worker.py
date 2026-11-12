@@ -1,6 +1,4 @@
-"""Direct-process supervisor: the sole owner of child waitpid and cancellation."""
-
-from __future__ import annotations
+"""Supervisor child execution lifecycle."""
 
 import asyncio
 import json
@@ -9,10 +7,10 @@ import signal
 import subprocess
 import sys
 
-from kkrunner.backends.local_process import pump_stream, stop_local_process
-from kkrunner.remote.mailbox import publish_outcome
-from kkrunner.remote.supervisor import SupervisorStreams
-from kkrunner.runs.base import FailurePhase, RunState
+from kkrunner.backends.support.process import pump_stream, stop_local_process
+from kkrunner.backends.supervised.streams import SupervisorStreams
+from kkrunner.backends.supervised.mailbox import publish_outcome
+from kkrunner.execution import FailurePhase, RunState
 
 _SPEC_ENV = "KKRunner_REMOTE_PROCESS_SPEC"
 _START_FD_ENV = "KKRunner_REMOTE_PROCESS_START_FD"
@@ -195,5 +193,8 @@ def main():
     return asyncio.run(_run(spec))
 
 
-if __name__ == "__main__":
+
+
+
+if __name__ == '__main__':
     sys.exit(main())

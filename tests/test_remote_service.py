@@ -5,9 +5,17 @@ import pytest
 
 from kkrunner.runs import FailurePhase, RunStatus
 from kkrunner import RunState
-from kkrunner.backends import psij
+from kkrunner.remote.handles import decode_handle, encode_handle
+from kkrunner.backends.supervised import mailbox as remote_mailbox
+from kkrunner.backends.supervised import backend as process_operations
+from kkrunner.backends.supervised import streams as supervisor
+from kkrunner.backends.supervised import worker as remote_process_worker
+from kkrunner.backends.psij import slurm as psij_slurm
+from kkrunner.backends.psij import backend as scheduler_operations
+from kkrunner.backends.psij import support as psij_support
+from kkrunner.backends.support import messages
+from kkrunner.backends.contracts import SubmissionNotStarted
 from kkrunner.remote import service as remote_service
-from kkrunner.remote import worker as remote_process_worker
 
 
 def _process_handle(tmp_path):
@@ -18,16 +26,16 @@ def _process_handle(tmp_path):
         "receipt_id": "a" * 32,
         "socket_path": "/tmp/test-supervisor.sock",
     }
-    return (handle, remote_service._encode_handle(handle), outcome)
+    return (handle, encode_handle(handle), outcome)
 
 
-def _psij_handle(tmp_path):
-    handle = {"kind": "psij", "backend": "slurm", "url": None, "native_id": "42"}
-    return (handle, remote_service._encode_handle(handle))
+def _psij_handle(tmp_path, *, executor_name="slurm"):
+    handle = {"kind": "psij", "executor_name": executor_name, "url": None, "native_id": "42"}
+    return (handle, encode_handle(handle))
 
 
 def _write_outcome(path, state, return_code, failure_phase=None):
-    from kkrunner.remote import mailbox as remote_mailbox
+    from kkrunner.backends.supervised import mailbox as remote_mailbox
 
     return remote_mailbox.publish_outcome("a" * 32, state, return_code, failure_phase)
 
@@ -35,7 +43,7 @@ def _write_outcome(path, state, return_code, failure_phase=None):
 def test_remote_id_is_opaque_backend_handle_without_lifecycle_state(tmp_path):
     handle, remote_id, _ = _process_handle(tmp_path)
     assert remote_id != str(handle)
-    decoded = remote_service._decode_handle(remote_id)
+    decoded = decode_handle(remote_id)
     assert decoded["kind"] == "process"
     assert decoded["identity"]["pid"] == 123
     assert "state" not in decoded
@@ -59,10 +67,10 @@ def test_remote_status_wire_reply_is_shared_between_process_and_psij(
 ):
     _, process_id, _ = _process_handle(tmp_path)
     _, psij_id = _psij_handle(tmp_path)
-    monkeypatch.setattr(remote_service, "_process_outcome", lambda receipt_id: (state, return_code, phase, error))
+    monkeypatch.setattr(process_operations, "_process_outcome", lambda receipt_id: (state, return_code, phase, error))
     monkeypatch.setattr(
-        psij,
-        "_slurm_status_native",
+        psij_slurm,
+        "status",
         lambda native_id: RunStatus(
             state, backend_id=native_id, return_code=return_code, failure_phase=phase, message=error
         ),
@@ -92,7 +100,7 @@ def test_remote_status_wire_reply_is_shared_between_process_and_psij(
 )
 def test_malformed_remote_id_is_rejected_at_decode_boundary(payload):
     with pytest.raises(ValueError, match="Invalid remote execution id"):
-        remote_service._decode_handle(payload)
+        decode_handle(payload)
 
 
 def test_remote_id_rejects_wrong_field_types():
@@ -113,13 +121,13 @@ def test_remote_id_rejects_wrong_field_types():
         {"kind": "psij", "backend": "slurm", "native_id": None, "url": None},
     ):
         with pytest.raises(ValueError, match="Invalid remote execution id"):
-            remote_service._decode_handle(remote_service._encode_handle(handle))
+            decode_handle(encode_handle(handle))
 
 
 def test_mailbox_receipt_survives_until_client_ack(tmp_path, monkeypatch):
     monkeypatch.setenv("KKRunner_REMOTE_STATE_DIR", str(tmp_path))
     _, remote_id, outcome = _process_handle(tmp_path)
-    monkeypatch.setattr(remote_service, "_process_running", lambda _handle: False)
+    monkeypatch.setattr(process_operations.ProcessIdentity, "is_running", lambda self: False)
     assert remote_service.status_remote(remote_id)["state"] == RunState.UNKNOWN.value
     _write_outcome(outcome, RunState.FINISHED, 0)
     assert remote_service.status_remote(remote_id)["state"] == RunState.FINISHED.value
@@ -131,7 +139,7 @@ def test_mailbox_receipt_survives_until_client_ack(tmp_path, monkeypatch):
 
 def test_status_distinguishes_launch_and_execution_failure(tmp_path, monkeypatch):
     _, remote_id, outcome = _process_handle(tmp_path)
-    monkeypatch.setattr(remote_service, "_process_running", lambda _handle: False)
+    monkeypatch.setattr(process_operations.ProcessIdentity, "is_running", lambda self: False)
     monkeypatch.setenv("KKRunner_REMOTE_STATE_DIR", str(tmp_path))
     _write_outcome(outcome, RunState.FAILED, 127, FailurePhase.LAUNCH)
     launch = remote_service.status_remote(remote_id)
@@ -148,9 +156,9 @@ def test_status_distinguishes_launch_and_execution_failure(tmp_path, monkeypatch
 def test_slurm_status_is_native_and_does_not_use_psij_job_cache(tmp_path, monkeypatch):
     _, remote_id = _psij_handle(tmp_path)
     monkeypatch.setattr(
-        remote_service, "_psij_executor", lambda opts: pytest.fail("local Slurm status must not initialize PSI/J")
+        scheduler_operations, "_create_executor", lambda opts: pytest.fail("local Slurm status must not initialize PSI/J")
     )
-    monkeypatch.setattr(psij, "_slurm_details", lambda native_id: {"JobState": "RUNNING", "ExitCode": "0:0"})
+    monkeypatch.setattr(psij_slurm, "_slurm_details", lambda native_id: {"JobState": "RUNNING", "ExitCode": "0:0"})
     status = remote_service.status_remote(remote_id)
     assert status["state"] == RunState.RUNNING.value
     assert status["return_code"] is None
@@ -169,8 +177,8 @@ def test_slurm_accounting_status_maps_state_and_exit_code(
     tmp_path, monkeypatch, accounting_state, code, expected_state, expected_phase
 ):
     _, remote_id = _psij_handle(tmp_path)
-    monkeypatch.setattr(psij, "_slurm_details", lambda _native_id: {})
-    monkeypatch.setattr(psij, "_scheduler_output", lambda argv: f"42|{accounting_state}|{code}:0|\n")
+    monkeypatch.setattr(psij_slurm, "_slurm_details", lambda _native_id: {})
+    monkeypatch.setattr(psij_slurm, "_scheduler_output", lambda argv: f"42|{accounting_state}|{code}:0|\n")
     status = remote_service.status_remote(remote_id)
     assert status["state"] == expected_state.value
     assert status["return_code"] == code
@@ -185,17 +193,13 @@ def test_psij_cancellation_does_not_invent_terminal_state(monkeypatch, tmp_path)
         def cancel(self):
             calls.append("cancel")
 
-    class Backend:
-        def attach_native_job(self, native_id):
-            calls.append(native_id)
-            return Job()
+    def attach(handle):
+        calls.append(handle["native_id"])
+        return Job()
 
-    monkeypatch.setattr(remote_service, "_psij_executor", lambda _: Backend())
-    monkeypatch.setattr(
-        remote_service,
-        "status_remote",
-        lambda _: {"state": RunState.RUNNING.value, "return_code": None, "failure_phase": None},
-    )
+    monkeypatch.setattr(scheduler_operations, "_attach_job", attach)
+    from kkrunner.backends.contracts import JobStatus
+    monkeypatch.setattr(psij_slurm, "status", lambda _: JobStatus(RunState.RUNNING))
     status = remote_service.cancel_remote(remote_id)
     assert status["state"] == RunState.RUNNING.value
     assert calls == ["42", "cancel"]
@@ -207,73 +211,49 @@ def _stub_terminal_psij_job(monkeypatch, state, return_code, observed):
     class Job:
         status = SimpleNamespace(state=SimpleNamespace(name=state), exit_code=return_code, message=None)
 
+        def set_job_status_callback(self, callback):
+            self.callback = callback
+
         def wait(self):
             observed.append("wait")
             return self.status
 
-    class Backend:
-        def attach_native_job(self, native_id):
-            observed.append(("attach", native_id))
-            return Job()
+    def attach(handle):
+        observed.append(("attach", handle["native_id"]))
+        return Job()
 
-    monkeypatch.setattr(remote_service, "_psij_executor", lambda _: Backend())
+    monkeypatch.setattr(psij_support, "_attach_job", attach)
 
 
-def test_follow_waits_for_psij_terminal_without_repeated_status_probes(tmp_path, monkeypatch):
-    _, remote_id = _psij_handle(tmp_path)
+@pytest.mark.parametrize(
+    "native_state, return_code, expected_state, expected_phase",
+    [
+        ("COMPLETED", 0, RunState.FINISHED, None),
+        ("FAILED", 7, RunState.FAILED, FailurePhase.EXECUTION),
+        ("COMPLETED", 7, RunState.FAILED, FailurePhase.EXECUTION),
+    ],
+)
+def test_non_slurm_follow_uses_psij_terminal_without_slurm_queries(
+    tmp_path, monkeypatch, native_state, return_code, expected_state, expected_phase,
+):
+    _, remote_id = _psij_handle(tmp_path, executor_name="pbs")
     observed = []
-    _stub_terminal_psij_job(monkeypatch, "COMPLETED", 0, observed)
-    checks = []
-
-    def status(_remote_id):
-        checks.append(_remote_id)
-        return {"state": RunState.FINISHED.value, "return_code": 0}
-
-    monkeypatch.setattr(remote_service, "status_remote", status)
-    outcome = remote_service.follow_remote(remote_id, io.BytesIO(), io.BytesIO())
-    assert outcome["state"] == RunState.FINISHED.value
-    assert observed == [("attach", "42"), "wait"]
-    assert checks == [remote_id]
-
-
-def test_follow_uses_native_terminal_when_status_query_is_transient_unknown(tmp_path, monkeypatch):
-    _, remote_id = _psij_handle(tmp_path)
-    observed = []
-    _stub_terminal_psij_job(monkeypatch, "FAILED", 7, observed)
-    checks = []
-
-    def status(_remote_id):
-        checks.append(_remote_id)
-        return {"state": RunState.UNKNOWN.value}
-
-    monkeypatch.setattr(remote_service, "status_remote", status)
-    outcome = remote_service.follow_remote(remote_id, io.BytesIO(), io.BytesIO())
-    assert outcome["state"] == RunState.FAILED.value
-    assert outcome["return_code"] == 7
-    assert outcome["failure_phase"] == FailurePhase.EXECUTION.value
-    assert observed == [("attach", "42"), "wait"]
-    assert checks == [remote_id]
-
-
-def test_follow_fallback_treats_completed_nonzero_psij_as_failed(tmp_path, monkeypatch):
-    _, remote_id = _psij_handle(tmp_path)
-    observed = []
-    _stub_terminal_psij_job(monkeypatch, "COMPLETED", 7, observed)
-    monkeypatch.setattr(remote_service, "status_remote", lambda _remote_id: {"state": RunState.UNKNOWN.value})
+    _stub_terminal_psij_job(monkeypatch, native_state, return_code, observed)
+    monkeypatch.setattr(psij_slurm, "status", lambda _native_id: pytest.fail("PBS must not query Slurm"))
     outcome = remote_service.follow_remote(remote_id, io.BytesIO(), io.BytesIO())
     assert outcome == {
-        "state": RunState.FAILED.value,
-        "return_code": 7,
-        "failure_phase": FailurePhase.EXECUTION.value,
+        "state": expected_state.value,
+        "return_code": return_code,
+        "failure_phase": None if expected_phase is None else expected_phase.value,
         "error": None,
     }
-    assert observed == [("attach", "42"), "wait"]
+    assert observed == [("attach", "42")]
 
 
 def test_cancel_requests_supervisor_without_inventing_terminal_state(tmp_path, monkeypatch):
     _, remote_id, outcome = _process_handle(tmp_path)
     monkeypatch.setenv("KKRunner_REMOTE_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(remote_service, "_process_running", lambda _handle: True)
+    monkeypatch.setattr(process_operations.ProcessIdentity, "is_running", lambda self: True)
     sent = []
 
     class Connection:
@@ -295,7 +275,7 @@ def test_cancel_requests_supervisor_without_inventing_terminal_state(tmp_path, m
         def recv(self, count):
             return b'{"accepted":true}\n'
 
-    monkeypatch.setattr(remote_service.socket, "socket", lambda *args: Connection())
+    monkeypatch.setattr(process_operations.socket, "socket", lambda *args: Connection())
     status = remote_service.cancel_remote(remote_id)
     assert sent == [b'{"command":"cancel"}\n']
     assert status["state"] == RunState.RUNNING.value
@@ -310,7 +290,7 @@ def test_cancel_after_natural_completion_keeps_backend_outcome(tmp_path, monkeyp
     def forbidden(*args):
         raise AssertionError("Terminal process must not receive cancellation")
 
-    monkeypatch.setattr(remote_service.socket, "socket", forbidden)
+    monkeypatch.setattr(process_operations.socket, "socket", forbidden)
     status = remote_service.cancel_remote(remote_id)
     assert status["state"] == RunState.FINISHED.value
     assert status["return_code"] == 0
@@ -331,7 +311,7 @@ def test_uncertain_submit_uses_only_temporary_identity_ticket(tmp_path, monkeypa
 
     monkeypatch.setenv("KKRunner_REMOTE_STATE_DIR", str(tmp_path))
     run_id = uuid4().hex
-    handle = remote_service._encode_handle(
+    handle = encode_handle(
         {
             "kind": "process",
             "identity": {"pid": 123, "start_time": 456, "time_basis": "linux-boot"},
@@ -340,12 +320,12 @@ def test_uncertain_submit_uses_only_temporary_identity_ticket(tmp_path, monkeypa
         }
     )
     reply = {"remote_id": handle, "directory": str(tmp_path), "state": "running"}
-    remote_service._publish_submission(run_id, reply)
-    recovered = remote_service.recover_remote(run_id, {"executor": "local", "directory": str(tmp_path)})
+    remote_mailbox.publish_submission(run_id, reply)
+    recovered = remote_service.recover_remote(run_id, {"executor": "process", "directory": str(tmp_path)})
     assert recovered["remote_id"] == handle
-    assert remote_service.acknowledge_submission(run_id) == {"acknowledged": True}
-    assert remote_service.recover_remote(run_id, {"executor": "local"}) is None
-    assert remote_service.acknowledge_submission(run_id) == {"acknowledged": False}
+    assert remote_service.acknowledge_submission("process", run_id) == {"acknowledged": True}
+    assert remote_service.recover_remote(run_id, {"executor": "process"}) is None
+    assert remote_service.acknowledge_submission("process", run_id) == {"acknowledged": False}
 
 
 def test_direct_follow_uses_shared_socket_protocol(tmp_path, monkeypatch):
@@ -373,11 +353,11 @@ def test_direct_follow_uses_shared_socket_protocol(tmp_path, monkeypatch):
         worker = asyncio.create_task(remote_process_worker._run(spec))
         with os.fdopen(rd, "rb") as source:
             socket_path = (await asyncio.to_thread(source.readline)).decode().strip()
-        remote_id = remote_service._encode_handle(
+        remote_id = encode_handle(
             {
                 "kind": "process",
                 "socket_path": socket_path,
-                "identity": remote_service.ProcessIdentity.read(os.getpid()).to_dict(),
+                "identity": process_operations.ProcessIdentity.read(os.getpid()).to_dict(),
                 "receipt_id": "a" * 32,
             }
         )
@@ -418,11 +398,11 @@ def test_direct_follow_without_stream_files_is_live_only(tmp_path, monkeypatch):
         worker = asyncio.create_task(remote_process_worker._run(spec))
         with os.fdopen(rd, "rb") as source:
             socket_path = (await asyncio.to_thread(source.readline)).decode().strip()
-        remote_id = remote_service._encode_handle(
+        remote_id = encode_handle(
             {
                 "kind": "process",
                 "socket_path": socket_path,
-                "identity": remote_service.ProcessIdentity.read(os.getpid()).to_dict(),
+                "identity": process_operations.ProcessIdentity.read(os.getpid()).to_dict(),
                 "receipt_id": "b" * 32,
             }
         )
@@ -440,51 +420,40 @@ def test_direct_follow_without_stream_files_is_live_only(tmp_path, monkeypatch):
 
 
 def test_ssh_psij_cleanup_removes_declared_outputs_before_submit(tmp_path, monkeypatch):
-    from kkrunner.remote import service as remote_service
+    """The PSI/J target must protect caches and clear stale outputs before submit."""
+    from types import SimpleNamespace
 
     output = tmp_path / "previous.dat"
     kept = tmp_path / "cache.pot"
     output.write_bytes(b"stale")
     kept.write_bytes(b"restart")
-    from kkrunner.backends.psij import PsijRunner
 
-    class Runner(PsijRunner):
-        def __init__(self, spec):
-            self.spec = spec
-            self._stdout_path = None
-            self._stderr_path = None
+    job = SimpleNamespace(
+        native_id="native-123",
+        status=SimpleNamespace(state=SimpleNamespace(name="ACTIVE"), exit_code=None),
+    )
+    submitted = []
 
-        backend_id = "native-123"
-        state = RunState.RUNNING
-        return_code = None
-        failure_phase = None
-        result = type("Result", (), {"output_file": None, "error_file": None})()
-
-        def submit(self):
-            self._prepare_io()
+    class Executor:
+        def submit(self, candidate):
+            assert candidate is job
             assert not output.exists()
             assert kept.read_bytes() == b"restart"
+            submitted.append(candidate)
 
-    class Backend:
-        backend = "slurm"
-        url = None
-
-        def create_managed_run(self, spec, *, run_id):
-            return Runner(spec)
-
-    monkeypatch.setattr(remote_service, "_psij_executor", lambda options: Backend())
+    monkeypatch.setattr(scheduler_operations, "_create_executor", lambda options: (object(), Executor()))
+    monkeypatch.setattr(scheduler_operations, "prepare_job", lambda *args, **kwargs: job)
     request = {
-        "id": "d" * 32,
-        "executor": "psij",
+        "submission_key": "d" * 32,
+        "backend": "psij",
         "directory": str(tmp_path),
         "argv": ["true"],
         "output_files": [str(output)],
         "cache_files": [str(kept)],
-        "input_file": None,
-        "output_file": None,
     }
     response = remote_service.submit_remote(request)
     assert response["remote_id"]
+    assert submitted == [job]
 
 
 def test_scheduler_request_protects_remote_cache_wildcards(tmp_path):
@@ -502,11 +471,14 @@ def test_scheduler_request_protects_remote_cache_wildcards(tmp_path):
             "cache_files": [{"path": "external-cache.pot", "before": None}],
         },
     }
-    spec = remote_service._request_spec(request)
-    assert "restart-*.pot" in spec.cache_files
-    assert "external-cache.pot" in spec.cache_files
-    assert "*.pot" in spec.output_files
-    assert "case.inp" in spec.input_files
+    from kkrunner.backends.support.messages import normalize_request
+    request.pop("client_sync")
+    request["cache_files"].extend(("restart-*.pot", "external-cache.pot"))
+    normalized = normalize_request(request)
+    assert str(tmp_path / "restart-*.pot") in normalized["cache_files"]
+    assert str(tmp_path / "external-cache.pot") in normalized["cache_files"]
+    assert str(tmp_path / "*.pot") in normalized["output_files"]
+    assert str(tmp_path / "case.inp") in normalized["input_files"]
 
 
 @pytest.mark.skipif(__import__("os").name != "posix", reason="Supervisor needs POSIX process groups and Unix sockets")
@@ -517,7 +489,7 @@ def test_failed_submission_ticket_cannot_leave_calculation_running(tmp_path, mon
     marker = tmp_path / "must-not-run"
     request = {
         "id": "a" * 32,
-        "executor": "local",
+        "executor": "process",
         "detached": True,
         "directory": str(tmp_path),
         "argv": [
@@ -533,7 +505,7 @@ def test_failed_submission_ticket_cannot_leave_calculation_running(tmp_path, mon
     def reject(_run_id, _reply):
         raise OSError("ticket store unavailable")
 
-    monkeypatch.setattr(remote_service, "_publish_submission", reject)
+    monkeypatch.setattr(remote_mailbox, "publish_submission", reject)
     with pytest.raises(SubmissionNotStarted, match="ticket store unavailable"):
         remote_service.submit_remote(request)
     assert not marker.exists()
@@ -558,11 +530,20 @@ def test_remote_cleanup_preserves_cache_matches_while_removing_stale_outputs(tmp
         output_files=("*.out",),
         cache_files=("restart.out",),
     )
-    remote_service._clean_request_outputs(spec, work, str(stdout))
+    from kkrunner.backends.support.messages import normalize_request
+    from kkrunner.files.availability import prepare_target_outputs
+
+    request = normalize_request({
+        "directory": str(work), "argv": ["true"], "input_file": "main.inp",
+        "output_file": "run.log", "output_files": ["*.out"],
+        "cache_files": ["restart.out"],
+    })
+    prepare_target_outputs(request)
     assert cache.read_text() == "restart.out"
     assert input_file.read_text() == "main.inp"
     assert not stale.exists()
-    assert not stdout.exists()
+    # The worker, not pre-submission cleanup, owns truncating stdout.
+    assert stdout.read_text() == "run.log"
 
 
 def test_remote_cleanup_checks_collisions_before_deleting_any_output(tmp_path):
@@ -582,8 +563,15 @@ def test_remote_cleanup_checks_collisions_before_deleting_any_output(tmp_path):
         output_files=("old.dat", "restart.dat"),
         cache_files=("restart.dat",),
     )
-    with pytest.raises(ValueError, match="overlaps protected"):
-        remote_service._clean_request_outputs(spec, work)
+    from kkrunner.backends.support.messages import normalize_request
+    from kkrunner.files.availability import prepare_target_outputs
+
+    request = normalize_request({
+        "directory": str(work), "argv": ["true"],
+        "output_files": ["old.dat", "restart.dat"], "cache_files": ["restart.dat"],
+    })
+    with pytest.raises(ValueError, match="Explicit output conflicts with input/cache"):
+        prepare_target_outputs(request)
     assert stale.read_text() == "old"
     assert cache.read_text() == "restart"
 
@@ -593,7 +581,7 @@ def test_supervisor_prelaunch_failure_publishes_durable_receipt_and_closes_fd(tm
     import asyncio
     import os
 
-    from kkrunner.remote import mailbox as remote_mailbox
+    from kkrunner.backends.supervised import mailbox as remote_mailbox
 
     monkeypatch.setenv("KKRunner_REMOTE_STATE_DIR", str(tmp_path / "state"))
     read_fd, write_fd = os.pipe()
@@ -656,7 +644,7 @@ def test_supervisor_stdin_close_failure_preserves_terminal_receipt(tmp_path, mon
     import os
     import sys
 
-    from kkrunner.remote import mailbox as remote_mailbox
+    from kkrunner.backends.supervised import mailbox as remote_mailbox
 
     original_input = tmp_path / "input"
     original_input.write_bytes(b"input")
@@ -748,13 +736,13 @@ def test_remote_submit_ipc_setup_failure_closes_every_fd(tmp_path, monkeypatch, 
         created.extend(pair)
         return pair
 
-    monkeypatch.setattr(remote_service.tempfile, "mkdtemp", directory_factory)
-    monkeypatch.setattr(remote_service.os, "pipe", pipe)
+    monkeypatch.setattr(process_operations.tempfile, "mkdtemp", directory_factory)
+    monkeypatch.setattr(process_operations.os, "pipe", pipe)
     monkeypatch.setattr(
-        remote_service.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("supervisor must not start")
+        process_operations.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("supervisor must not start")
     )
     with pytest.raises(SubmissionNotStarted, match="cannot allocate"):
-        remote_service._local_submit({"argv": ("never-executed",), "directory": str(tmp_path), "detached": True})
+        process_operations.SupervisedBackend.submit({"argv": ("never-executed",), "directory": str(tmp_path), "detached": True})
     assert not directory.exists()
     assert len(created) == {"socket_directory": 0, "first_pipe": 0, "second_pipe": 2}[failure_point]
     for fd in created:
@@ -782,16 +770,17 @@ def test_remote_submit_json_setup_failure_cleans_pipes_and_directory(tmp_path, m
     def broken_json(*args, **kwargs):
         raise TypeError("invalid worker specification")
 
-    monkeypatch.setattr(remote_service.tempfile, "mkdtemp", directory_factory)
-    monkeypatch.setattr(remote_service.os, "pipe", pipe)
-    monkeypatch.setattr(remote_service.json, "dumps", broken_json)
+    monkeypatch.setattr(process_operations.tempfile, "mkdtemp", directory_factory)
+    monkeypatch.setattr(process_operations.os, "pipe", pipe)
+    monkeypatch.setattr(process_operations.json, "dumps", broken_json)
     monkeypatch.setattr(
-        remote_service.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("supervisor must not start")
+        process_operations.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("supervisor must not start")
     )
-    with pytest.raises(TypeError, match="invalid worker specification"):
-        remote_service._local_submit({"argv": ("never-executed",), "directory": str(tmp_path), "detached": True})
+    with pytest.raises(SubmissionNotStarted, match="invalid worker specification"):
+        process_operations.SupervisedBackend.submit({"argv": ("never-executed",), "directory": str(tmp_path), "detached": True})
     assert not directory.exists()
-    assert len(created) == 4
+    # Serialization is validated before allocating IPC descriptors.
+    assert len(created) == 0
     for fd in created:
         with pytest.raises(OSError):
             os.fstat(fd)
@@ -806,13 +795,13 @@ def test_legacy_tick_identity_is_not_reinterpreted_as_seconds():
         "socket_path": "/missing/socket",
     }
     with pytest.raises(ValueError, match="Invalid remote execution id"):
-        remote_service._decode_handle(remote_service._encode_handle(handle))
+        decode_handle(encode_handle(handle))
 
 
 def test_unverifiable_identity_prevents_releasing_calculation(tmp_path, monkeypatch):
     from kkrunner.runs.base import SubmissionNotStarted
 
-    monkeypatch.setattr(remote_service.ProcessIdentity, "read", classmethod(lambda cls, pid: None))
+    monkeypatch.setattr(process_operations.ProcessIdentity, "read", classmethod(lambda cls, pid: None))
     marker = tmp_path / "must-not-run"
     with pytest.raises(SubmissionNotStarted, match="Unable to verify"):
         remote_service.submit_remote(
@@ -844,11 +833,11 @@ def test_follow_recovers_only_empty_handshake_with_launch_failure_receipt(
 ):
     import asyncio
 
-    from kkrunner.remote import supervisor
+    from kkrunner.backends.supervised import streams as supervisor
 
     _, remote_id, _ = _process_handle(tmp_path)
-    facts = remote_service._status_reply(state, 127, failure_phase=phase)
-    monkeypatch.setattr(remote_service, "status_remote", lambda handle: facts)
+    facts = messages.status_reply(state, 127, failure_phase=phase)
+    monkeypatch.setattr(process_operations.SupervisedBackend, "status", staticmethod(lambda handle: facts))
 
     async def closed_socket(path, offsets, on_chunk):
         reader = asyncio.StreamReader()
@@ -857,7 +846,7 @@ def test_follow_recovers_only_empty_handshake_with_launch_failure_receipt(
         async for kind, offset, data in supervisor.receive(reader):
             on_chunk(kind, offset, data)
 
-    monkeypatch.setattr(supervisor, "follow_socket", closed_socket)
+    monkeypatch.setattr(process_operations, "follow_socket", closed_socket)
     out = io.BytesIO()
     if recover:
         assert remote_service.follow_remote(remote_id, out, io.BytesIO()) == facts
@@ -870,12 +859,12 @@ def test_follow_recovers_only_empty_handshake_with_launch_failure_receipt(
 def test_malformed_follow_greeting_is_not_hidden_by_launch_failure_receipt(tmp_path, monkeypatch):
     import asyncio
 
-    from kkrunner.remote import supervisor
+    from kkrunner.backends.supervised import streams as supervisor
 
     _, remote_id, _ = _process_handle(tmp_path)
     monkeypatch.setattr(
-        remote_service, "status_remote",
-        lambda handle: remote_service._status_reply(RunState.FAILED, 127, failure_phase=FailurePhase.LAUNCH),
+        process_operations.SupervisedBackend, "status",
+        staticmethod(lambda handle: messages.status_reply(RunState.FAILED, 127, failure_phase=FailurePhase.LAUNCH)),
     )
 
     async def malformed_socket(*args):
@@ -884,24 +873,24 @@ def test_malformed_follow_greeting_is_not_hidden_by_launch_failure_receipt(tmp_p
         reader.feed_eof()
         return await supervisor.receive(reader).__anext__()
 
-    monkeypatch.setattr(supervisor, "follow_socket", malformed_socket)
+    monkeypatch.setattr(process_operations, "follow_socket", malformed_socket)
     with pytest.raises(ValueError, match="Unknown supervisor stream protocol"):
         remote_service.follow_remote(remote_id, io.BytesIO(), io.BytesIO())
 
 
 @pytest.mark.parametrize("offset", [-1, 1, False])
 def test_launch_failure_receipt_does_not_mask_rejected_follow_offset(tmp_path, monkeypatch, offset):
-    from kkrunner.remote import supervisor
+    from kkrunner.backends.supervised import streams as supervisor
 
     _, remote_id, _ = _process_handle(tmp_path)
     monkeypatch.setattr(
-        remote_service, "status_remote",
-        lambda handle: remote_service._status_reply(RunState.FAILED, 127, failure_phase=FailurePhase.LAUNCH),
+        process_operations.SupervisedBackend, "status",
+        staticmethod(lambda handle: messages.status_reply(RunState.FAILED, 127, failure_phase=FailurePhase.LAUNCH)),
     )
 
     async def closed_socket(*args):
         raise supervisor.SupervisorClosedBeforeFollow(b"", len(supervisor.MAGIC))
 
-    monkeypatch.setattr(supervisor, "follow_socket", closed_socket)
+    monkeypatch.setattr(process_operations, "follow_socket", closed_socket)
     with pytest.raises(supervisor.SupervisorClosedBeforeFollow):
         remote_service.follow_remote(remote_id, io.BytesIO(), io.BytesIO(), stdout_offset=offset)

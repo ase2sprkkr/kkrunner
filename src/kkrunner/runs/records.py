@@ -14,7 +14,7 @@ from typing import Optional
 from kkrunner.files.manifest import FileManifest
 from kkrunner.runs.base import FailurePhase, RunState
 from kkrunner.runs.metadata import freeze_metadata
-from kkrunner.runs.model import Execution
+from kkrunner.runs.model import ExecutionMetadata
 from kkrunner.support.durability import durable_mkdir, durable_write_json
 from kkrunner.support.file_locks import FileLock
 
@@ -37,7 +37,7 @@ class RunRecord:
     state: RunState
     created_at: str
     updated_at: str
-    execution: Execution
+    execution: ExecutionMetadata
     files: FileManifest
     finished_at: Optional[str] = None
     return_code: Optional[int] = None
@@ -78,11 +78,11 @@ class RunRecord:
         if self.project_id is not None:
             object.__setattr__(self, "project_id", str(self.project_id))
         if isinstance(self.execution, dict):
-            object.__setattr__(self, "execution", Execution(**self.execution))
+            object.__setattr__(self, "execution", ExecutionMetadata(**self.execution))
         if isinstance(self.files, dict):
             object.__setattr__(self, "files", FileManifest(**self.files))
-        if not isinstance(self.execution, Execution):
-            raise TypeError("execution must describe an Execution")
+        if not isinstance(self.execution, ExecutionMetadata):
+            raise TypeError("execution must be ExecutionMetadata")
         if not isinstance(self.files, FileManifest):
             raise TypeError("files must describe a FileManifest")
         if not isinstance(self.state, RunState):
@@ -210,6 +210,8 @@ class RunStore:
                 or updated.project_id != latest.project_id
             ):
                 raise ValueError("Run update cannot change persistent identity or metadata")
+            if updated.execution.submission_key != latest.execution.submission_key:
+                raise ValueError("Submission key cannot change")
             if latest.execution.backend_id is not None and updated.execution.backend_id != latest.execution.backend_id:
                 raise ValueError("Backend identity cannot change")
             return self._write_unlocked(updated)

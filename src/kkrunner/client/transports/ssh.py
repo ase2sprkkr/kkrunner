@@ -1,4 +1,4 @@
-"""Low-level asynchronous command and file transports."""
+"""SSH invocation, streaming and remote file transport."""
 
 from __future__ import annotations
 
@@ -6,213 +6,83 @@ import asyncio
 import os
 import posixpath
 import shlex
-import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Optional, Protocol
+from typing import Literal, Tuple
 from uuid import uuid4
 
-from kkrunner.files.queries import _sources, checked_files, expand_local_files, local_file_signature, query_files
+from kkrunner.client.contracts import Operation
+from kkrunner.files.queries import (
+    _sources,
+    checked_files,
+    expand_local_files,
+    finalize_upload,
+    local_file_signature,
+    query_files,
+)
 from kkrunner.files.snapshots import snapshot_destination
-from kkrunner.files.versions import file_digest
-from kkrunner.remote.protocol import json_request
+
+from .base import Transport, _completed_process, _local_temporary_path
+from .rpc import operation_command, operation_payload, operation_result
 
 
-class RunningCommand(Protocol):
-    """A running command with independently readable output streams."""
-
-    stdout: asyncio.StreamReader
-    stderr: asyncio.StreamReader
-    returncode: Optional[int]
-
-    async def wait(self) -> int: ...
-
-    def terminate(self) -> None: ...
-
-
-def _local_temporary_path(destination):
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    return destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
-
-
-class Transport:
-    """Run commands and move files on one target machine.
-
-    Transport operations are asynchronous because remote execution is mostly
-    I/O. ``put_file()`` and ``get_file()`` are exact one-file primitives.
-    ``put_files()`` and ``get_files()`` accept one path/pattern or an iterable
-    and preserve each matched file's path relative to the supplied source root.
-    Wildcards are always expanded on the source side of the transfer.
-    """
-
-    async def run(self, argv, *, cwd=None, input=None, check=True):
-        raise NotImplementedError
-
-    async def start(self, argv, *, cwd=None, stdin=None) -> RunningCommand:
-        raise NotImplementedError
-
-    async def put_file(self, source, destination):
-        raise NotImplementedError
-
-    async def get_file(self, source, destination):
-        raise NotImplementedError
-
-    async def put_files(self, sources, source_root, destination_root):
-        raise NotImplementedError
-
-    async def get_files(self, sources, source_root, destination_root):
-        raise NotImplementedError
-
-    async def expand_files(self, sources, root):
-        """Expand paths/patterns on the target filesystem into concrete files."""
-        raise NotImplementedError
-
-    async def query_files(self, sources, *, root=None, digest=False):
-        """Query literal paths, or expand root-confined patterns, in one batch."""
-        raise NotImplementedError
-
-    async def read_file(self, path):
-        raise NotImplementedError
-
-    async def snapshot_file(self, source, *, destination=None):
-        """Read a changing file, bypassing the stable-result download contract."""
-        if destination is None:
-            return await self.read_file(source)
-        with snapshot_destination(destination) as out:
-            out.write(await self.read_file(source))
-        return Path(destination)
-
-    async def file_digest(self, path):
-        """Return the SHA-256 digest of *path*, or ``None`` if it does not exist."""
-        raise NotImplementedError
-
-    async def file_signature(self, path):
-        """Return ``(size, mtime_ns)`` for *path*, or ``None`` if absent."""
-        raise NotImplementedError
-
-
-async def _completed_process(process, argv, input=None, check=True):
-    try:
-        stdout, stderr = await process.communicate(input)
-    except BaseException:
-        # Cancelling a command must not abandon its subprocess (or leave an
-        # unreaped zombie). This also handles failures during pipe I/O.
-        if process.returncode is None:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-        await process.wait()
-        raise
-    result = subprocess.CompletedProcess(tuple(argv), process.returncode, stdout, stderr)
-    if check and result.returncode:
-        raise subprocess.CalledProcessError(
-            result.returncode,
-            result.args,
-            output=result.stdout,
-            stderr=result.stderr,
-        )
-    return result
-
-
-class LocalTransport(Transport):
-    """Transport backed by asyncio subprocesses and the local filesystem."""
-
-    async def start(self, argv, *, cwd=None, stdin=None):
-        return await asyncio.create_subprocess_exec(
-            *(os.fspath(arg) for arg in argv),
-            cwd=cwd,
-            stdin=stdin,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-    async def run(self, argv, *, cwd=None, input=None, check=True):
-        argv = tuple(os.fspath(arg) for arg in argv)
-        process = await self.start(
-            argv,
-            cwd=cwd,
-            stdin=asyncio.subprocess.PIPE if input is not None else None,
-        )
-        return await _completed_process(process, argv, input=input, check=check)
-
-    async def put_file(self, source, destination):
-        source = os.fspath(source)
-        signature = local_file_signature(source)
-        if signature is None:
-            raise FileNotFoundError(source)
-        destination = Path(destination)
-        temporary = _local_temporary_path(destination)
-        try:
-            await asyncio.to_thread(shutil.copyfile, source, temporary)
-            if local_file_signature(source) != signature:
-                raise RuntimeError(f"Local file changed while copying: {source}")
-            stat = temporary.stat()
-            os.utime(temporary, ns=(stat.st_atime_ns, signature[1]))
-            os.replace(temporary, destination)
-        finally:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
-
-    async def get_file(self, source, destination):
-        await self.put_file(source, destination)
-
-    async def query_files(self, sources, *, root=None, digest=False):
-        return checked_files(await asyncio.to_thread(query_files, sources, root=root, digest=digest))
-
-    async def expand_files(self, sources, root):
-        return expand_local_files(sources, root)
-
-    async def _transfer_files(self, paths, source_root, destination_root, transfer):
-        """Preserve relative layout when copying selected local files."""
-        source_root = Path(source_root).expanduser().resolve()
-        destination_root = Path(destination_root).expanduser().resolve()
-        transfers = []
-        for source in paths:
-            destination = destination_root / Path(source).relative_to(source_root)
-            await transfer(source, destination)
-            transfers.append((source, os.fspath(destination)))
-        return tuple(transfers)
-
-    async def put_files(self, sources, source_root, destination_root):
-        paths = expand_local_files(sources, source_root)
-        return await self._transfer_files(paths, source_root, destination_root, self.put_file)
-
-    async def get_files(self, sources, source_root, destination_root):
-        paths = await self.expand_files(sources, source_root)
-        return await self._transfer_files(paths, source_root, destination_root, self.get_file)
-
-    async def read_file(self, path):
-        return await asyncio.to_thread(Path(path).read_bytes)
-
-    async def snapshot_file(self, source, *, destination=None):
-        if destination is None:
-            return await self.read_file(source)
-        with snapshot_destination(destination) as out:
-            with open(source, "rb") as current:
-                await asyncio.to_thread(shutil.copyfileobj, current, out)
-        return Path(destination)
-
-    async def file_digest(self, path):
-        return await asyncio.to_thread(file_digest, path, missing_ok=True)
-
-    async def file_signature(self, path):
-        return await asyncio.to_thread(local_file_signature, path)
-
-
+@dataclass(frozen=True)
 class SshTransport(Transport):
     """Transport using the system ``ssh`` client."""
 
-    def __init__(self, host, *, ssh="ssh", options=(), zstd=False, command=("kkrunner",)):
-        self.command = tuple(command)
-        self.host = host
-        self.ssh = ssh
-        self.options = tuple(options)
-        self.zstd = zstd
-        self._tar_command = ("tar", "--zstd") if zstd else ("tar",)
+    async def open_call(self, operation, request, on_output, *, local_io=None, use_stdin=True):
+        from .calls import SshCall
+        command = operation_command(operation, python=self.python_command, framed=True)
+        process = await self.start(
+            (*command, operation_payload((request,), {})), stdin=asyncio.subprocess.PIPE,
+        )
+        return SshCall(process, on_output)
+
+    async def follow(self, operation, identity, on_output, **options):
+        from .follow import follow_framed_command
+        operation = Operation.for_backend(operation.backend, "follow_framed")
+        process = await self.start_operation(operation, identity, **options)
+        return await follow_framed_command(process, on_output)
+
+    async def call(self, operation: Operation, *args, **kwargs):
+        payload = operation_payload(args, kwargs).encode("utf-8")
+        command = operation_command(operation, python=self.python_command)
+        result = await self.run(command, input=payload)
+        return operation_result(result.stdout)
+
+    async def start_operation(self, operation: Operation, *args, **kwargs):
+        payload = operation_payload(args, kwargs)
+        command = operation_command(operation, python=self.python_command, streaming=True)
+        return await self.start((*command, payload), stdin=asyncio.subprocess.PIPE)
+
+    host: str
+    ssh: str = "ssh"
+    options: Tuple[str, ...] = ()
+    zstd: bool = False
+    python_command: Tuple[str, ...] = ("python3",)
+    kind: Literal["ssh"] = "ssh"
+
+    def __post_init__(self):
+        if self.kind != "ssh":
+            raise ValueError("SshTransport.kind must be 'ssh'")
+        for name in ("host", "ssh"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"SSH {name} must be a nonempty string")
+        for name in ("options", "python_command"):
+            value = getattr(self, name)
+            value = (value,) if isinstance(value, str) else tuple(value)
+            if any(not isinstance(item, str) for item in value):
+                raise TypeError(f"SSH {name} must contain strings")
+            object.__setattr__(self, name, value)
+        if not self.python_command:
+            raise ValueError("SSH python_command must not be empty")
+        if type(self.zstd) is not bool:
+            raise TypeError("SSH zstd must be bool")
+
+    @property
+    def _tar_command(self):
+        return ("tar", "--zstd") if self.zstd else ("tar",)
 
     def _command(self, argv, cwd=None):
         command = shlex.join([os.fspath(arg) for arg in argv])
@@ -264,16 +134,7 @@ class SshTransport(Transport):
                 await _completed_process(process, command)
             if local_file_signature(source) != signature:
                 raise RuntimeError(f"Local file changed while uploading: {source}")
-            await json_request(
-                self,
-                self.command,
-                "finalize-upload",
-                payload={
-                    "temporary": temporary,
-                    "destination": destination,
-                    "mtime_ns": signature[1],
-                },
-            )
+            await self._finalize_upload(temporary, destination, signature[1])
         except BaseException:
             # Remote cleanup is best-effort and must not mask the upload error.
             try:
@@ -281,6 +142,13 @@ class SshTransport(Transport):
             except Exception:
                 pass
             raise
+
+    async def call_function(self, function, *args, **kwargs):
+        """Invoke a portable shared function through the common operation path."""
+        return await self.call(Operation.standalone(function), *args, **kwargs)
+
+    async def _finalize_upload(self, temporary, destination, mtime_ns):
+        await self.call_function(finalize_upload, temporary, destination, mtime_ns)
 
     async def get_file(self, source, destination):
         source = os.fspath(source)
@@ -325,15 +193,12 @@ class SshTransport(Transport):
         return Path(destination)
 
     async def query_files(self, sources, *, root=None, digest=False):
-        results = await json_request(
-            self,
-            self.command,
-            "query-files",
-            payload={
-                "paths": [os.fsdecode(path) for path in _sources(sources)],
-                "root": None if root is None else os.fsdecode(root),
-                "digest": digest,
-            },
+        # Identical portable implementation for raw SSH and agent-backed SSH.
+        results = await self.call_function(
+            query_files,
+            [os.fsdecode(path) for path in _sources(sources)],
+            root=None if root is None else os.fsdecode(root),
+            digest=digest,
         )
         return checked_files(results)
 

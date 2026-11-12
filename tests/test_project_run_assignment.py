@@ -4,9 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from kkrunner.runs import Executor
-from kkrunner.projects import ProjectExecutionManager, ProjectRepository
-from kkrunner import RunState
+from kkrunner.backends import SupervisedBackend
+from kkrunner.backends.contracts import JobStatus
+from kkrunner.client import EndpointClient
+from kkrunner.projects import ProjectRunManager, ProjectRepository
+from kkrunner import ExecutionSpec, RunState
 
 
 class _Runner:
@@ -17,6 +19,8 @@ class _Runner:
         self.exception = None
         self.failure_phase = None
         self.failure_message = None
+        self.return_code = 0
+        self.output_error = None
         self.submit_calls = 0
         self.on_submit = None
 
@@ -30,6 +34,19 @@ class _Runner:
     def wait(self):
         return self.result
 
+    @property
+    def requires_stream_retrieval(self):
+        return False
+
+    def configure_detached(self, detached):
+        pass
+
+    def configure_submission(self, request, **observation):
+        pass
+
+    def status(self):
+        return JobStatus(self.state, return_code=self.return_code)
+
     def cancel(self):
         self.state = RunState.CANCELLED
 
@@ -40,22 +57,23 @@ class _Runner:
         pass
 
 
-class _Executor(Executor):
-    name = "project-test"
+class _Executor(EndpointClient):
+    def __init__(self):
+        super().__init__(SupervisedBackend)
 
-    def create_managed_run(self, spec, *, run_id, callback=None):
-        self.run_id = run_id
+    def create_run_parts(self, spec, *, submission_key=None, callback=None):
+        parts = super().create_run_parts(spec, submission_key=submission_key, callback=callback)
+        self.run_id = submission_key
         self.runner = _Runner()
-        return self.runner
-
-    def create_run(self, spec, callback=None):
-        raise AssertionError("managed run must use create_managed_run")
+        self.runner.spec = spec
+        parts.job = self.runner
+        return parts
 
 
 def _fixture(tmp_path):
     projects = ProjectRepository(tmp_path / "projects")
     project = projects.create("Project")
-    manager = ProjectExecutionManager(project_repository=projects).for_project(project)
+    manager = ProjectRunManager(project_repository=projects).for_project(project)
     return (manager, projects, project)
 
 
@@ -64,14 +82,15 @@ def test_run_is_durable_in_project_namespace_before_backend_submit(tmp_path):
     executor = _Executor()
     run = manager.create_run(
         executor,
-        SimpleNamespace(directory=str(tmp_path)),
+        ExecutionSpec(("unused",), directory=str(tmp_path)),
         process_result=lambda outcome: outcome,
         metadata={"test": {"task": "DOS", "input_definition": "DOS"}},
     )
     observed = []
     executor.runner.on_submit = lambda: observed.append(manager.store.get(run.id).state)
     run.submit()
-    assert executor.run_id == run.id
+    assert executor.run_id == run.record.execution.submission_key
+    assert executor.run_id != run.id
     assert observed == [RunState.SUBMITTING]
     stored = manager.store.get(run.id)
     assert stored.metadata["test"]["input_definition"] == "DOS"
@@ -83,7 +102,7 @@ def test_run_is_durable_in_project_namespace_before_backend_submit(tmp_path):
 @pytest.mark.parametrize("explicit", (False, True), ids=("missing", "invalid"))
 def test_project_must_exist_before_backend_is_created(tmp_path, explicit):
     projects = ProjectRepository(tmp_path / "projects")
-    manager = ProjectExecutionManager(project_repository=projects)
+    manager = ProjectRunManager(project_repository=projects)
     executor = _Executor()
     options = {"project": "missing"} if explicit else {}
     errors = (KeyError, ValueError) if explicit else ValueError
@@ -91,7 +110,7 @@ def test_project_must_exist_before_backend_is_created(tmp_path, explicit):
     with pytest.raises(errors, match=message):
         manager.create_run(
             executor,
-            SimpleNamespace(directory=str(tmp_path)),
+            ExecutionSpec(("unused",), directory=str(tmp_path)),
             process_result=lambda outcome: outcome,
             **options,
             metadata={"test": {"task": "DOS"}},
