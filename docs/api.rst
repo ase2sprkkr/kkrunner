@@ -1,15 +1,13 @@
 API reference
-===============
+=============
 
-The root package provides backend-independent entry points for ordinary runs.
-Choose executors from :mod:`kkrunner.backends` or :mod:`kkrunner.remote`; projects,
-file manifests and advanced run contracts have their own public subpackages.
-These import paths are independent of the modules implementing each type.
+The root package provides backend-independent Run entry points. Execution
+technology lives in :mod:`kkrunner.backends`; local/SSH transport, client pooling
+and remote file synchronization belong to :mod:`kkrunner.client`. The remote
+service protocol does not expose a client execution facade.
 
 Common entry points
-----------------------
-
-.. py:module:: kkrunner
+-------------------
 
 .. currentmodule:: kkrunner
 
@@ -18,43 +16,34 @@ Common entry points
 
    ExecutionSpec
    ExecutionOutcome
+   Run
    RunManager
    RunStore
    RunState
    TaskFile
    ProcessingPending
 
-Execution contracts and durable records
------------------------------------------
-
-.. py:module:: kkrunner.runs
+Execution and durable records
+-----------------------------
 
 .. currentmodule:: kkrunner.runs
 
 .. autosummary::
    :toctree: _generated
 
-   LaunchSpec
    MpiSpec
    MpiNotFoundWarning
    RunStatus
    FailurePhase
-   Runner
-   BackendRunner
-   ManagedRunner
-   Executor
-   PersistentRunner
    RunRecord
    CorruptRunRecord
    DuplicateSubmissionError
    HistoricalFileMismatchError
-   Execution
+   ExecutionMetadata
    WorkingDirectory
 
-Declared files and identity
------------------------------
-
-.. py:module:: kkrunner.files
+Declared files
+--------------
 
 .. currentmodule:: kkrunner.files
 
@@ -72,42 +61,57 @@ Declared files and identity
    FileVersion
    FileVersionCaptureError
 
-Execution backends
----------------------
-
-.. py:module:: kkrunner.backends
+Backends and their execution contracts
+--------------------------------------
 
 .. currentmodule:: kkrunner.backends
 
 .. autosummary::
    :toctree: _generated
 
-   LocalExecutor
-   PsijExecutor
-   ExecutorEndpoint
-   ExecutorPool
-   default_executor_pool
+   DirectBackend
+   SupervisedBackend
+   PsijBackend
+   BackendConfig
 
-Remote execution and transport
---------------------------------
-
-.. py:module:: kkrunner.remote
-
-.. currentmodule:: kkrunner.remote
+.. currentmodule:: kkrunner.backends.contracts
 
 .. autosummary::
    :toctree: _generated
 
-   RemoteEndpointExecutor
+   Backend
+   BackendCapability
+   DirectOperations
+   ManagedOperations
+   JobRef
+   JobStatus
+   JobFailurePhase
+   RecoveryDisposition
+   RecoveryResult
+   ObservationUnavailable
+   UnsupportedCapability
+
+Clients, transports and pooling
+---------------------------------------
+
+.. currentmodule:: kkrunner.client
+
+.. autosummary::
+   :toctree: _generated
+
+   EndpointClient
+   StagingSpec
+   JobProtocol
+   SubmissionContext
+   JobAttachment
+   ClientPool
+   default_client_pool
    Transport
-   RunningCommand
    LocalTransport
    SshTransport
 
 Projects
-----------
-
-.. py:module:: kkrunner.projects
+--------
 
 .. currentmodule:: kkrunner.projects
 
@@ -119,23 +123,19 @@ Projects
    ProjectRepositoryError
    ProjectConflictError
    ProjectDeleteError
-   ProjectExecutionManager
+   ProjectRunManager
    default_projects_directory
 
-Backend implementation interfaces
-------------------------------------
+Implementation interfaces
+-------------------------
 
-These modules expose lower-level runner implementations and resource ownership
-helpers for backend authors. They are not re-exported by the public facades.
+These modules expose concrete job implementations and resource-ownership
+helpers. They are not re-exported by the public facades.
 
 .. currentmodule:: kkrunner
 
 .. autosummary::
    :toctree: _generated
 
-   backends.local.LocalRunner
-   backends.psij.PsijRunner
-   remote.runner.RemoteRunner
-   runs.processing.PostprocessingRunner
-   runs.base.ExecutionResources
-   runs.base.ResourceOwnedRunner
+   client.job.Job
+   client.file_session.FileSession
