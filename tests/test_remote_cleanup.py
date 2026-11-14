@@ -95,7 +95,8 @@ def test_endpoint_cleanup_rejects_paths_not_in_manifest(tmp_path):
     client = EndpointClient(DirectBackend, transport=transport)
     record = SimpleNamespace(
         execution=SimpleNamespace(
-            transport, WorkingDirectory(str(tmp_path), str(root)),
+            transport=transport,
+            directory=WorkingDirectory(str(tmp_path), str(root)),
             backend=client.backend_config,
         ),
         files=FileManifest(outputs=(FileEntry(remote_path=str(path)),)),
@@ -129,8 +130,8 @@ def test_manifest_file_in_nested_or_external_tau_directory_is_deletable(tmp_path
     client = EndpointClient(DirectBackend, transport=LoopbackSshTransport())
     record = SimpleNamespace(
         execution=SimpleNamespace(
-            client.transport,
-            WorkingDirectory(str(tmp_path), str(workdir)),
+            transport=client.transport,
+            directory=WorkingDirectory(str(tmp_path), str(workdir)),
             backend=client.backend_config,
         ),
         files=FileManifest(outputs=(
@@ -233,7 +234,8 @@ def test_ssh_endpoint_deletes_recorded_directory_recursively(tmp_path):
     client = EndpointClient(DirectBackend, transport=LoopbackSshTransport())
     record = SimpleNamespace(
         execution=SimpleNamespace(
-            client.transport, WorkingDirectory(str(local), str(work)),
+            transport=client.transport,
+            directory=WorkingDirectory(str(local), str(work)),
             backend=client.backend_config,
         ),
         files=FileManifest(outputs=(FileEntry(remote_path=str(taudir), kind="directory"),)),
@@ -295,7 +297,8 @@ def test_endpoint_requires_declared_kind_not_actual_filesystem_type(tmp_path):
     client = EndpointClient(DirectBackend, transport=transport)
     record = SimpleNamespace(
         execution=SimpleNamespace(
-            transport, WorkingDirectory(str(tmp_path), str(root)),
+            transport=transport,
+            directory=WorkingDirectory(str(tmp_path), str(root)),
             backend=client.backend_config,
         ),
         files=FileManifest(outputs=(
