@@ -1,10 +1,13 @@
 """Snapshots and retrieval of declared files through a client's file context."""
 
+import asyncio
 import glob
 import os
 import posixpath
 
 from kkrunner.client.file_context import FileContext, _relative_local_path
+from kkrunner.client.contracts import Operation
+from kkrunner.files.queries import remote_file_cleanup
 from kkrunner.client.staging import StagingSpec
 from kkrunner.support.async_utils import run_coro_sync as _run_sync
 
@@ -87,3 +90,63 @@ class FileAccess:
                 destinations=destinations,
             )
         )
+
+
+    async def _remote_cleanup(self, run, paths, *, expected=None):
+        """Operate on declared remote files, including TAUDIR outside the run directory."""
+        if self.client.transport.is_local:
+            raise ValueError("Remote-file cleanup requires a remote transport")
+        entries = (
+            *run.files.inputs, *run.files.outputs,
+            *(cache.file for cache in run.files.caches),
+            run.files.stdin, run.files.stdout, run.files.stderr,
+        )
+        declared = {}
+        for entry in entries:
+            if entry is None or entry.remote_path is None:
+                continue
+            previous = declared.setdefault(entry.remote_path, entry.kind)
+            if previous != entry.kind:
+                raise ValueError(f"Contradictory declared kinds for {entry.remote_path}")
+        paths = tuple(paths)
+        if not set(paths).issubset(declared) or len(paths) != len(set(paths)):
+            raise ValueError("Only distinct, declared remote manifest paths may be inspected or deleted")
+        context = FileContext(self.client, StagingSpec.from_mapping(run.files.mapping))
+        # The manifest is the authority: execution.directory.target is not
+        # necessarily the parent of all output files (e.g. TAUDIR under a
+        # separate TAUPATH). The target still rejects symlinks, directories,
+        # non-absolute paths and changed file identities.
+        resolved = tuple(
+            [await context.resolve_target_path(path) for path in paths]
+        )
+        expected_resolved = None if expected is None else {
+            resolved_path: (
+                dict(expected[original_path])
+                if isinstance(expected[original_path], dict)
+                else list(expected[original_path])
+            )
+            for original_path, resolved_path in zip(paths, resolved)
+        }
+        kinds_resolved = {
+            resolved_path: declared[original_path]
+            for original_path, resolved_path in zip(paths, resolved)
+        }
+        replies = await asyncio.wait_for(
+            self.client.transport.call(
+                Operation.standalone(remote_file_cleanup),
+                resolved, expected=expected_resolved, kinds=kinds_resolved,
+            ),
+            timeout=45 if expected is not None else 15,
+        )
+        return tuple(
+            {**reply, "path": original_path}
+            for original_path, reply in zip(paths, replies)
+        )
+
+    def inspect_remote_files(self, run, paths):
+        """Retrieve exact remote file identities for a deletion confirmation."""
+        return _run_sync(self._remote_cleanup(run, paths))
+
+    def delete_remote_files(self, run, expected):
+        """Delete explicitly approved files, reporting per-file failures."""
+        return _run_sync(self._remote_cleanup(run, tuple(expected), expected=expected))
