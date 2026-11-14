@@ -81,7 +81,7 @@ def test_direct_ssh_persistence_is_separate_from_job_mechanism(tmp_path):
     parts = backend.create_run_parts(spec, submission_key="client-submission-key")
     from kkrunner.client.job import Job
     assert type(parts.job) is Job
-    assert BackendCapability.REATTACH not in backend.backend.supports
+    assert BackendCapability.REATTACH in backend.backend.supports
     assert BackendCapability.RECOVER not in backend.backend.supports
 
 

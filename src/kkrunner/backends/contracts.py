@@ -208,6 +208,11 @@ class DirectOperations(Protocol):
     def status(job_ref: str) -> StatusReply: ...
 
     @staticmethod
+    async def follow(
+        job_ref: str, stdout: ByteSink, stderr: ByteSink, **options: Unpack[FollowOptions],
+    ) -> StatusReply: ...
+
+    @staticmethod
     async def stream(
         request: ExecutionRequest, *,
         stdout: Optional[Union[ByteSink, AsyncByteSink]] = None,

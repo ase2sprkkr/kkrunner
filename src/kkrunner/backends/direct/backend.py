@@ -23,7 +23,7 @@ class DirectBackend(Backend, DirectOperations):
 
     def __init__(self, **options):
         super().__init__(**options)
-        self.supports = frozenset({BackendCapability.CANCEL, BackendCapability.STATUS})
+        self.supports = frozenset({BackendCapability.CANCEL, BackendCapability.STATUS, BackendCapability.REATTACH})
 
     @staticmethod
     def status(remote_id: str):
@@ -145,6 +145,165 @@ class DirectBackend(Backend, DirectOperations):
         if members is None:
             return reply("unknown", "Cannot verify surviving process-group members")
         return reply("finished", "Process ended; exit code unavailable")
+
+    @staticmethod
+    async def follow(
+        remote_id, stdout, stderr, *,
+        stdout_offset=0, stderr_offset=0, poll_interval=0.2,
+        stdout_path=None, stderr_path=None, started=None,
+    ):
+        """Observe saved direct output without owning or restarting the job.
+
+        The operation is source-portable to SSH hosts without kkrunner. A
+        legacy opaque ID can be observed but cannot prove termination.
+        Cancelling this observer never signals the calculation.
+        """
+        import asyncio
+        import inspect
+        import os
+        import subprocess
+        import sys
+        from uuid import UUID
+
+        if type(poll_interval) not in (int, float) or not 0.05 <= poll_interval <= 10:
+            raise ValueError("Invalid follow interval")
+        offsets = {"out": stdout_offset, "err": stderr_offset}
+        paths = {"out": stdout_path, "err": stderr_path}
+        sinks = {"out": stdout, "err": stderr}
+        for kind, offset in offsets.items():
+            if offset is not None and (type(offset) is not int or offset < 0):
+                raise ValueError(f"Invalid {kind} output offset")
+        if paths["out"] is not None and paths["out"] == paths["err"]:
+            # Independent offsets cannot reconstruct an interleaved file.
+            paths["err"] = None
+
+        def group_running(pid):
+            """A process group can outlive its original session leader."""
+            if sys.platform.startswith("linux"):
+                try:
+                    with os.scandir("/proc") as entries:
+                        for entry in entries:
+                            if not entry.name.isdecimal():
+                                continue
+                            try:
+                                with open(entry.path + "/stat", encoding="ascii") as source:
+                                    fields = source.read().rsplit(")", 1)[1].split()
+                                if int(fields[2]) == pid and fields[0] not in ("Z", "X", "x"):
+                                    return True
+                            except FileNotFoundError:
+                                continue
+                            except (PermissionError, OSError, ValueError, IndexError):
+                                return None
+                except OSError:
+                    return None
+                return False
+            try:
+                probe = subprocess.run(
+                    ("ps", "-e", "-o", "pgid=,stat="),
+                    capture_output=True, text=True, check=True,
+                    env={**os.environ, "LC_ALL": "C"},
+                )
+                for line in probe.stdout.splitlines():
+                    fields = line.split()
+                    if (len(fields) >= 2 and fields[0].isdigit()
+                            and int(fields[0]) == pid and fields[1][0] not in ("Z", "X")):
+                        return True
+                return False
+            except (OSError, subprocess.CalledProcessError):
+                return None
+
+        def process_state():
+            """Respect boot identity, PID reuse and surviving group members."""
+            parts = remote_id.split(":") if isinstance(remote_id, str) else ()
+            if len(parts) != 4 or parts[0] not in ("direct", "ps"):
+                return "unknown"
+            try:
+                pid = int(parts[1])
+                if pid <= 0:
+                    return "unknown"
+            except (ValueError, TypeError):
+                return "unknown"
+            if parts[0] == "direct":
+                if not sys.platform.startswith("linux"):
+                    return "unknown"
+                try:
+                    start = int(parts[2])
+                    boot = str(UUID(parts[3]))
+                    if start < 0 or boot != parts[3]:
+                        return "unknown"
+                    with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as source:
+                        current_boot = source.read().strip()
+                    if current_boot != boot:
+                        return "finished"
+                    try:
+                        with open(f"/proc/{pid}/stat", encoding="ascii") as source:
+                            fields = source.read().rsplit(")", 1)[1].split()
+                        if int(fields[19]) != start:
+                            return "finished"
+                        if int(fields[2]) != pid or int(fields[3]) != pid:
+                            return "unknown"
+                        if fields[0] not in ("Z", "X", "x"):
+                            return "running"
+                    except FileNotFoundError:
+                        pass  # The process group may outlive the leader.
+                except (OSError, ValueError, TypeError, OverflowError, IndexError):
+                    return "unknown"
+            else:
+                if sys.platform.startswith("linux"):
+                    return "unknown"
+                try:
+                    probe = subprocess.run(
+                        ("ps", "-p", str(pid), "-o", "lstart=", "-o", "stat="),
+                        capture_output=True, text=True,
+                        env={**os.environ, "LC_ALL": "C"},
+                    )
+                    if probe.returncode not in (0, 1) or parts[3] != str(pid):
+                        return "unknown"
+                    fields = probe.stdout.split()
+                    if fields and "_".join(fields[:-1]).replace(":", "-") != parts[2]:
+                        return "finished"
+                    if fields and fields[-1][0] not in ("Z", "X"):
+                        return "running"
+                except (OSError, IndexError):
+                    return "unknown"
+            alive = group_running(pid)
+            return "running" if alive is True else "finished" if alive is False else "unknown"
+
+        async def copy_available():
+            copied = False
+            for kind, path in paths.items():
+                offset = offsets[kind]
+                if path is None or offset is None:
+                    continue
+                try:
+                    with open(path, "rb") as stream:
+                        stream.seek(0, os.SEEK_END)
+                        size = stream.tell()
+                        if size < offset:
+                            raise RuntimeError(f"Observed output was truncated: {path}")
+                        stream.seek(offset)
+                        data = stream.read(65536)
+                except FileNotFoundError:
+                    continue  # The calculation may not have written it yet.
+                if data:
+                    pending = sinks[kind].write(data)
+                    if inspect.isawaitable(pending):
+                        await pending
+                    sinks[kind].flush()
+                    offsets[kind] += len(data)
+                    copied = True
+            return copied
+
+        while True:
+            copied = await copy_available()
+            if process_state() == "finished":
+                while await copy_available():
+                    pass  # Deliver final bytes already on disk.
+                return {"state": "finished", "return_code": None,
+                        "failure_phase": None,
+                        "error": "Direct process ended; exit code unavailable"}
+            if not copied:
+                await asyncio.sleep(poll_interval)
 
     @staticmethod
     def cancel(remote_id: str, *, timeout: float = 1.0):

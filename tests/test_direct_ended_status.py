@@ -56,7 +56,7 @@ def process():
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux procfs identity")
 def test_direct_status_is_independent_of_live_session(process):
     ref = _linux_ref(process.pid)
-    assert DirectBackend().supports == frozenset({BackendCapability.STATUS, BackendCapability.CANCEL})
+    assert DirectBackend().supports == frozenset({BackendCapability.STATUS, BackendCapability.CANCEL, BackendCapability.REATTACH})
     running = DirectBackend.status(ref)
     assert running["state"] == "running"
     assert running["return_code"] is None

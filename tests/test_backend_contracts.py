@@ -90,18 +90,18 @@ def test_backends_are_namespaces_and_endpoints_own_jobs(tmp_path):
         BackendCapability.REATTACH, BackendCapability.RECOVER, BackendCapability.STATUS,
         BackendCapability.CANCEL,
     })
-    assert DirectBackend().supports == frozenset({BackendCapability.STATUS, BackendCapability.CANCEL})
+    assert DirectBackend().supports == frozenset({BackendCapability.STATUS, BackendCapability.CANCEL, BackendCapability.REATTACH})
     assert SupervisedBackend().supports == managed
     assert PsijBackend().supports == managed
 
 
-def test_direct_rejects_reattachment_without_resubmission():
+def test_direct_reattachment_does_not_imply_submission_recovery():
     from kkrunner.backends import DirectBackend
-    from kkrunner.backends.contracts import UnsupportedCapability
     from kkrunner.client import EndpointClient
 
-    with pytest.raises(UnsupportedCapability, match="reattachment"):
-        EndpointClient(DirectBackend).open_run_parts(object())
+    capabilities = EndpointClient(DirectBackend).backend.supports
+    assert BackendCapability.REATTACH in capabilities
+    assert BackendCapability.RECOVER not in capabilities
 
 
 def test_local_and_ssh_managed_endpoints_use_one_client_job_class(tmp_path):
