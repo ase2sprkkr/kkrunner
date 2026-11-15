@@ -755,9 +755,13 @@ class RunManager:
             self._acknowledged_results.add(key)
             return True
 
-    def reconcile_acknowledgements(self):
+    def reconcile_acknowledgements(self, *, on_error=None):
         """Retry idempotent result ACKs for durable terminal records."""
-        return tuple(record.id for record in self.store.runs(active=False) if self._acknowledge_result(record))
+        options = {} if on_error is None else {"on_error": on_error}
+        return tuple(
+            record.id for record in self.store.runs(active=False, **options)
+            if self._acknowledge_result(record)
+        )
 
     @staticmethod
     def _acknowledge_submission(client, record):
@@ -805,9 +809,11 @@ class RunManager:
             process_result=process_result, callback=callback, parts=parts, owned_resources=owned_resources,
         )
 
-    def refresh(self, records=None):
-        self.reconcile_acknowledgements()
-        records = tuple(self.store.runs(active=True) if records is None else records)
+    def refresh(self, records=None, *, on_error=None):
+        """Refresh records; optionally report and skip unreadable history entries."""
+        self.reconcile_acknowledgements(on_error=on_error)
+        options = {} if on_error is None else {"on_error": on_error}
+        records = tuple(self.store.runs(active=True, **options) if records is None else records)
         current = {record.id: record for record in records}
         groups = {}
         for record in records:

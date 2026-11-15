@@ -283,18 +283,27 @@ class RunStore:
         days = [path for path in self.directory.iterdir() if path.is_dir()]
         return tuple(sorted(days, key=lambda path: path.name, reverse=newest))
 
-    def _records_in_directory(self, directory, *, newest):
+    def _records_in_directory(self, directory, *, newest, on_error=None):
         records = []
         for path in directory.glob("*.json"):
             if self._forgotten_path(path.stem).is_file():
                 continue
             try:
                 records.append(self._decode(path))
-            except CorruptRunRecord:
-                raise
+            except CorruptRunRecord as exc:
+                if on_error is None:
+                    raise
+                on_error(exc)
         return sorted(records, key=lambda record: record.created_at, reverse=newest)
 
-    def runs(self, *, active=None, limit=None, newest=False):
+    def runs(self, *, active=None, limit=None, newest=False, on_error=None):
+        """List run history.
+
+        Strict by default: an invalid record raises CorruptRunRecord. History
+        viewers may supply on_error(exception) to report and skip individual
+        unreadable records while preserving their files unchanged. Safety-
+        critical consumers (e.g. submission conflict checks) stay strict.
+        """
         if limit is not None and limit < 0:
             raise ValueError("limit must be non-negative")
         if limit == 0:
@@ -303,7 +312,7 @@ class RunStore:
         with self._lock:
             records = []
             for day in self._day_directories(newest=newest):
-                for record in self._records_in_directory(day, newest=newest):
+                for record in self._records_in_directory(day, newest=newest, on_error=on_error):
                     if active is True and record.state.is_terminal:
                         continue
                     if active is False and not record.state.is_terminal:
