@@ -350,8 +350,11 @@ recovery never authorizes a duplicate submission.
 The backend contract and pure identity/status/recovery values live in
 `backends.contracts`. Client Job/composition protocols and attachment contexts
 live in `client.contracts`. `Operation` in that module describes which backend
-method or standalone function to call. `client.transports.rpc` owns the
-JSON/streaming bootstrap, argument encoding and reply/error decoding together.
+method or standalone function to call. `client.transports.rpc` assembles remote commands,
+encodes JSON arguments and decodes replies. The actual target-side
+`@portable` entry points (`_json_call`, `_stream_call`, `_framed_call`)
+live in `remote.bootstrap`; their function sources travel with each SSH
+operation without importing KKRunner on the target.
 `client.transports.source` requires an explicit `@portable`
 marker and extracts the selected function's source and its `@depends_on`
 dependencies when building a remote command. Detailed portability validation

@@ -112,3 +112,30 @@ def test_remote_function_requires_portable_marker():
         return 1
     with pytest.raises(TypeError, match="@portable"):
         _operation_script(nested)
+
+@pytest.mark.parametrize("mode", ("json", "stream", "framed"))
+def test_remote_bootstraps_are_source_only_and_compile(mode):
+    """Target bootstrap modules must not be imported by the remote script."""
+    from kkrunner.remote import bootstrap
+    from kkrunner.client.transports import rpc
+
+    implementation = {
+        "json": bootstrap._json_call,
+        "stream": bootstrap._stream_call,
+        "framed": bootstrap._framed_call,
+    }[mode]
+    assert implementation.__module__ == "kkrunner.remote.bootstrap"
+    assert implementation.__kkrunner_portable__ is True
+
+    command = rpc.operation_command(
+        Operation.standalone(query_files),
+        python=(sys.executable,),
+        streaming=mode == "stream",
+        framed=mode == "framed",
+    )
+    script = command[-1]
+    assert "def _kkrunner_invoke(" in script
+    assert "from kkrunner." not in script
+    if mode == "framed":
+        assert "def _kkrunner_protocol(" in script
+    compile(script, f"<remote {mode}>", "exec")

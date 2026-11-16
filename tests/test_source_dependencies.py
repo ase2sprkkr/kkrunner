@@ -8,23 +8,27 @@ import pytest
 from kkrunner.client.contracts import Operation
 from kkrunner.client.transports.rpc import operation_command, operation_payload, operation_result
 from kkrunner.client.transports.source import function_definition
-from kkrunner.support.decorators import depends_on
+from kkrunner.support.decorators import depends_on, portable
 
 
+@portable
 def increment(value):
     return value + 1
 
 
+@portable
 @depends_on(increment)
 def twice_increment(value):
     return increment(increment(value))
 
 
+@portable
 @depends_on(increment, twice_increment)
 def dependent_operation(value):
     return increment(twice_increment(value))
 
 
+@portable
 def undeclared_operation(value):
     return increment(value)
 
@@ -40,9 +44,11 @@ def test_transitive_dependencies_execute_in_isolated_stdlib_python(tmp_path):
     assert not reply.stderr
 
 
-def test_undeclared_global_function_is_still_rejected():
-    with pytest.raises(TypeError, match="module globals"):
-        function_definition(undeclared_operation)
+def test_source_extraction_does_not_validate_undeclared_globals():
+    # The marker is a declaration; direct-backend portability is tested separately.
+    definition = function_definition(undeclared_operation)
+    assert "def undeclared_operation(" in definition
+    assert "def increment(" not in definition
 
 
 def test_dependency_cycles_are_rejected(monkeypatch):
@@ -58,7 +64,7 @@ def test_conflicting_dependency_names_are_rejected():
         value = namespace[next(key for key in namespace if key not in globals
                                and not key.startswith("__"))]
         value.__source__ = source
-        return value
+        return portable(value)
 
     left = function("def helper(value): return value + 1")
     right = function("def helper(value): return value + 2")

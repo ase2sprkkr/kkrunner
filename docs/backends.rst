@@ -71,8 +71,11 @@ Transferring the full supervised or PSI/J runtime would duplicate installed
 dependencies and complicate persistence and recovery. Their helper source
 contains only delegated method imports; actual code is imported on the target
 host. Direct SSH is deliberately independent and sends the compact worker
-source. Calculation stream FOLLOW uses framed data to distinguish native
-stdout/stderr from SSH diagnostics and delivers a terminal receipt.
+source. Target-side invocation functions live in ``remote.bootstrap``;
+the client-side command assembly and reply decoding stay in
+``client.transports.rpc``. Calculation stream FOLLOW uses framed data to
+distinguish native stdout/stderr from SSH diagnostics and delivers a terminal
+receipt.
 
 Functions delivered as source must be explicitly marked with ``@portable``.
 They may share other top-level functions through ``@depends_on``, both from

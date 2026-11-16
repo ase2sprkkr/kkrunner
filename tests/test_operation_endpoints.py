@@ -9,12 +9,15 @@ import pytest
 
 from kkrunner.client.contracts import Operation
 from kkrunner.client.transports import LocalTransport, SshTransport
+from kkrunner.support.decorators import portable
 
 
+@portable
 def portable_add(a, b):
     return a + b
 
 
+@portable
 def portable_stream(text):
     import sys
     sys.stdout.write(text)
@@ -66,10 +69,9 @@ def test_reject_nonportable_operation_before_submission():
     captured = 10
     def nested(value):
         return captured + value
-    # Portability is validated when preparing target source, not when creating
-    # the client-side operation descriptor (local calls need no source).
+    # Source delivery requires explicit @portable; detailed validation is test-only.
     from kkrunner.client.transports.rpc import operation_command
-    with pytest.raises(TypeError, match="top-level Python function"):
+    with pytest.raises(TypeError, match="@portable"):
         operation_command(Operation.standalone(nested))
     from kkrunner.backends import SupervisedBackend
     with pytest.raises(ValueError, match="static backend operation"):
