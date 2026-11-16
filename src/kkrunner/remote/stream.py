@@ -13,7 +13,9 @@ import asyncio
 import json
 
 from kkrunner.execution import RunState
+from kkrunner.support.decorators import portable
 
+@portable
 def stream_protocol():
     """Self-contained wire encoder, also delivered to targets without KKRunner."""
     import json

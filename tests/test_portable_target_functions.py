@@ -107,8 +107,8 @@ def test_portable_output_cleanup_preserves_wildcard_cache(tmp_path):
     assert not stale.exists()
 
 
-def test_remote_function_rejects_module_globals():
+def test_remote_function_requires_portable_marker():
     def nested():
         return 1
-    with pytest.raises(TypeError, match="top-level"):
+    with pytest.raises(TypeError, match="@portable"):
         _operation_script(nested)

@@ -1,3 +1,13 @@
+def portable(function):
+    """Mark a function whose source may be sent to a remote interpreter.
+
+    This declaration does not validate the function. The direct-backend tests
+    verify portability without adding import-time or transport overhead.
+    """
+    function.__kkrunner_portable__ = True
+    return function
+
+
 def depends_on(*functions):
     """Declare function sources needed when this function is delivered remotely.
 

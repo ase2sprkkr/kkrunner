@@ -5,12 +5,16 @@ import os
 from pathlib import Path
 
 
+from kkrunner.support.decorators import portable
+
+
 def _sources(sources):
     if isinstance(sources, (str, bytes, os.PathLike)):
         return (sources,)
     return tuple(sources)
 
 
+@portable
 def query_files(sources, *, root=None, digest=False):
     """Return JSON-safe metadata, including root-constrained wildcard matches.
 
@@ -102,6 +106,7 @@ def local_file_signature(path):
     return None if item["status"] == "missing" else (item["size"], item["mtime_ns"])
 
 
+@portable
 def finalize_upload(temporary, destination, mtime_ns):
     """Atomically publish a completed upload; standalone on remote Python."""
     import os
@@ -111,6 +116,7 @@ def finalize_upload(temporary, destination, mtime_ns):
     os.replace(temporary, destination)
 
 
+@portable
 def remote_file_cleanup(paths, root=None, *, expected=None, kinds=None):
     """Inspect or remove exact declared paths, including whole directories.
 

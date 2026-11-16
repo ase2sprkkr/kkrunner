@@ -6,8 +6,10 @@ import os
 import signal
 
 from kkrunner.execution import MpiSpec
+from kkrunner.support.decorators import portable
 
 
+@portable
 def prepare_mpi(request, *, resolve_only=False):
     """Materialize MPI on the execution host; standalone for source delivery."""
     import errno

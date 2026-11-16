@@ -11,12 +11,14 @@ import json
 
 from kkrunner.backends.contracts import SubmissionNotStarted
 from kkrunner.client.contracts import Operation
+from kkrunner.support.decorators import portable
 
 
 class RemoteOperationError(RuntimeError):
     """The target ran the operation and reported an application failure."""
 
 
+@portable
 def _json_call(function):
     """Target bootstrap for a completed JSON call; stdout is protocol-only."""
     import asyncio
@@ -41,6 +43,7 @@ def _json_call(function):
     sys.stdout.write(encoded)
 
 
+@portable
 def _stream_call(function):
     """Target bootstrap leaving standard streams available to the operation."""
     import asyncio
@@ -54,6 +57,7 @@ def _stream_call(function):
         result = asyncio.run(result)
 
 
+@portable
 def _framed_call(function, protocol_factory):
     """Portable invocation carrying accepted identity, output and backend status."""
     import asyncio

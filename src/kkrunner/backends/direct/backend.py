@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from kkrunner.backends.contracts import Backend, BackendCapability, DirectOperations
 from kkrunner.backends.support.process import prepare_mpi
 from kkrunner.files.availability import prepare_target_outputs
-from kkrunner.support.decorators import depends_on
+from kkrunner.support.decorators import depends_on, portable
 
 from .process import observe_process
 
@@ -29,6 +29,7 @@ class DirectBackend(Backend, DirectOperations):
         self.supports = frozenset({BackendCapability.CANCEL, BackendCapability.STATUS, BackendCapability.REATTACH})
 
     @staticmethod
+    @portable
     @depends_on(observe_process)
     def status(remote_id: str):
         """Observe termination of the whole job, without asserting success."""
@@ -37,6 +38,7 @@ class DirectBackend(Backend, DirectOperations):
                 "failure_phase": None, "error": error}
 
     @staticmethod
+    @portable
     @depends_on(observe_process)
     async def follow(
         remote_id, stdout, stderr, *,
@@ -101,6 +103,7 @@ class DirectBackend(Backend, DirectOperations):
                 await asyncio.sleep(poll_interval)
 
     @staticmethod
+    @portable
     @depends_on(observe_process)
     def cancel(remote_id: str, *, timeout: float = 1.0):
         """Signal the original direct process group using a verified Linux identity.
@@ -181,6 +184,7 @@ class DirectBackend(Backend, DirectOperations):
         )
 
     @staticmethod
+    @portable
     async def stream(
         request: ExecutionRequest, *,
         stdout: Optional[Union[ByteSink, AsyncByteSink]] = None,

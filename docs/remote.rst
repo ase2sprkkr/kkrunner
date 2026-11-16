@@ -60,12 +60,14 @@ submission start after reservation. Declare every read, write and cache;
 undeclared executable side effects cannot be protected by file reservations.
 
 The SSH transport obtains the selected backend's ``SshHelper`` and transfers
-one method definition. Direct uses its own portable method. Supervisor and
-PSI/J use import-only helpers. Local execution calls the original methods,
-without another Python interpreter. ``DirectOperations`` and ``ManagedOperations``
-define static namespace interfaces, with JSON request/reply types in
-``kkrunner.backends.support.messages``. Type annotations are erased when extracting
-portable source; the executed method body is shared.
+the selected ``@portable``-marked source and its declared dependencies.
+Direct uses its own method. Supervisor and PSI/J use generated, import-only
+helpers. Local execution calls the original methods, without another Python
+interpreter. ``DirectOperations`` and ``ManagedOperations`` define static
+namespace interfaces, with JSON request/reply types in
+``kkrunner.backends.support.messages``. Client decorators and type
+annotations are erased when extracting source; direct-backend portability is
+validated by tests rather than during source delivery.
 
 Managed FOLLOW forwards calculation frames and terminal facts, keeping SSH
 diagnostics separate. Disconnecting a follower preserves the supervisor and

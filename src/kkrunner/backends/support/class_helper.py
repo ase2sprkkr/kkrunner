@@ -7,7 +7,7 @@ one method; neither a class definition nor unrelated methods cross SSH.
 import inspect
 from functools import lru_cache
 
-from kkrunner.support.decorators import class_property
+from kkrunner.support.decorators import class_property, portable
 
 def static_methods(backend):
     """Explicit public operations, excluding the helper-selection descriptor."""
@@ -42,7 +42,7 @@ def class_helper(backend):
         exec(compile(source, f"<{name}.{method} SSH helper>", "exec"), namespace)
         function = namespace[method]
         function.__source__ = source
-        members[method] = staticmethod(function)
+        members[method] = staticmethod(portable(function))
     return type(name + "Ssh", (), members)
 
 

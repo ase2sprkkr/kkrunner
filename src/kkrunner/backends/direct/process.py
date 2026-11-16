@@ -1,6 +1,10 @@
 """Portable observations of a direct process and its original process group."""
 
 
+from kkrunner.support.decorators import portable
+
+
+@portable
 def observe_process(remote_id):
     """Return (state, explanation), including descendants of an ended leader.
 

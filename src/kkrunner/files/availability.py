@@ -9,8 +9,10 @@ from __future__ import annotations
 import os
 
 from kkrunner.files.paths import expand_local_candidates, has_file_magic
+from kkrunner.support.decorators import portable
 
 
+@portable
 def prepare_target_outputs(request):
     """Protect target inputs and caches, then clear stale declared outputs.
 
