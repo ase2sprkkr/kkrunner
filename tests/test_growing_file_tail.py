@@ -291,17 +291,19 @@ def test_read_error_does_not_wait_for_scheduler_job_to_end(tmp_path, monkeypatch
     monkeypatch.setattr(GrowingFileTail, "read_available", unreadable)
 
     async def check():
-        with pytest.raises(PermissionError, match="inaccessible"):
-            await asyncio.wait_for(
-                _follow_with_mock_scheduler({"out": tmp_path / "job.out"}, lambda *_: None, wait, poll_interval=0.01), 2
-            )
-        assert await asyncio.to_thread(entered.wait, 1)
-        assert not release.is_set()
+        try:
+            with pytest.raises(PermissionError, match="inaccessible"):
+                await asyncio.wait_for(
+                    _follow_with_mock_scheduler({"out": tmp_path / "job.out"}, lambda *_: None, wait, poll_interval=0.01), 2
+                )
+            assert await asyncio.to_thread(entered.wait, 1)
+            assert not release.is_set()
+        finally:
+            # asyncio.run() waits for executor threads to finish. Unblock the
+            # simulated scheduler *before* that shutdown, not afterwards.
+            release.set()
 
-    try:
-        asyncio.run(check())
-    finally:
-        release.set()
+    asyncio.run(check())
 
 
 def test_terminal_creates_output_after_empty_read(tmp_path):
