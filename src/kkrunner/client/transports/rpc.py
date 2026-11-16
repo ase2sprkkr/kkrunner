@@ -122,6 +122,8 @@ def _framed_call(function, protocol_factory):
 
 def operation_command(operation: Operation, *, python=("python3",), streaming=False, framed=False):
     """Compile the selected source and its invocation protocol into Python argv."""
+    import ast
+
     from .source import function_definition
 
     if operation.function is not None:
@@ -131,11 +133,19 @@ def operation_command(operation: Operation, *, python=("python3",), streaming=Fa
         definition = function_definition(getattr(operation.backend.SshHelper, operation.method), static=True)
         entrypoint = operation.method
     bootstrap = _framed_call if framed else _stream_call if streaming else _json_call
-    bootstrap_name = "_kkrunner_invoke" if entrypoint != "_kkrunner_invoke" else "_kkrunner_invoke_"
+    names = {node.name for node in ast.parse(definition).body}
+
+    def unused_name(name):
+        while name in names:
+            name += "_"
+        names.add(name)
+        return name
+
+    bootstrap_name = unused_name("_kkrunner_invoke")
     options = ""
     if framed:
         from kkrunner.remote.stream import stream_protocol
-        protocol_name = "_kkrunner_protocol" if entrypoint != "_kkrunner_protocol" else "_kkrunner_protocol_"
+        protocol_name = unused_name("_kkrunner_protocol")
         definition += function_definition(stream_protocol, name=protocol_name)
         options = f", {protocol_name}"
     script = (

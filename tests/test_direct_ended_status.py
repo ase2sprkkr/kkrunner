@@ -148,6 +148,18 @@ def test_unverified_completion_does_not_claim_postprocessing(tmp_path):
     assert finished.return_code is None
 
 
+@pytest.mark.parametrize("code,expected", ((0, RunState.POSTPROCESSING), (7, RunState.FAILED)))
+def test_liveness_observation_preserves_known_exit_outcome(tmp_path, code, expected):
+    from kkrunner.runs.base import RunStatus
+
+    manager = RunManager(RunStore(tmp_path / "runs"))
+    record = manager.new_record(directory=tmp_path, processing_required=True)
+    record = manager.transition(record, state=RunState.DOWNLOADING, return_code=code)
+    observed = manager.update(record, RunStatus(RunState.FINISHED, return_code=None))
+    assert observed.return_code == code
+    assert observed.state == expected
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux procfs identity")
 def test_ssh_refresh_collects_available_outputs_without_exit_code(process, tmp_path, ssh_loopback):
     local = tmp_path / "local"

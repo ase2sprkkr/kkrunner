@@ -1,7 +1,9 @@
 """Collision reporting exposes exact (or conservatively overlapping) file paths."""
+import pytest
+
 from kkrunner import RunManager, RunStore
 from kkrunner.files import FileEntry, FileManifest
-from kkrunner.runs.conflicts import conflicting_files, submission_conflicts
+from kkrunner.runs.conflicts import conflicting_files, file_reference_overlaps, submission_conflicts
 
 
 def test_file_conflict_details_include_access_and_path(tmp_path):
@@ -36,3 +38,14 @@ def test_unrelated_output_files_have_no_conflict_details(tmp_path):
     )
     assert not submission_conflicts(first, second)
     assert conflicting_files(first, second) == ()
+
+
+@pytest.mark.parametrize("path,reference,directory,expected", (
+    ("/scratch/Fe.dos", "/scratch/*.dos", False, True),
+    ("/scratch/Fe.dos", "/scratch/*.out", False, False),
+    ("/scratch/job", "/scratch/job/*.dos", True, True),
+    ("/scratch/job/a.dat", "/scratch/job", False, True),
+    ("/scratch/job", "/scratch/job2/a.dat", True, False),
+))
+def test_cleanup_reference_overlap(path, reference, directory, expected):
+    assert file_reference_overlaps(path, reference, directory=directory) == expected

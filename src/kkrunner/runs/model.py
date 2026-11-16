@@ -68,3 +68,8 @@ class ExecutionMetadata:
         if self.backend_id is not None and self.backend_id != submitted.backend_id:
             raise ValueError("Cannot replace an assigned backend identity")
         return submitted
+
+    @property
+    def available(self):
+        """Whether backend control and target I/O can be reconstructed."""
+        return self.backend.available and self.transport.available

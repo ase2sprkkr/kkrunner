@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING
 from kkrunner.backends.contracts import Backend, BackendCapability, DirectOperations
 from kkrunner.backends.support.process import prepare_mpi
 from kkrunner.files.availability import prepare_target_outputs
+from kkrunner.support.decorators import depends_on
+
+from .process import observe_process
 
 if TYPE_CHECKING:
     from typing import Awaitable, BinaryIO, Callable, Mapping, Optional, Union
@@ -26,127 +29,15 @@ class DirectBackend(Backend, DirectOperations):
         self.supports = frozenset({BackendCapability.CANCEL, BackendCapability.STATUS, BackendCapability.REATTACH})
 
     @staticmethod
+    @depends_on(observe_process)
     def status(remote_id: str):
-        """Observe a direct process independently of the original session.
-
-        A returned FINISHED means termination was verified, not that the
-        calculation succeeded. An unavailable or unverifiable identity stays
-        UNKNOWN. Portable SSH execution needs only target-side stdlib.
-        """
-        import os
-        import subprocess
-        import sys
-
-        def reply(state, error=None):
-            return {
-                "state": state, "return_code": None,
-                "failure_phase": None, "error": error,
-            }
-
-        parts = remote_id.split(":") if isinstance(remote_id, str) else ()
-        if len(parts) != 4 or parts[0] not in ("direct", "ps"):
-            return reply("unknown", "A verifiable direct process identity is unavailable")
-        try:
-            pid = int(parts[1])
-            if pid <= 0:
-                raise ValueError("Invalid PID")
-        except (ValueError, TypeError):
-            return reply("unknown", "Invalid direct process identity")
-
-        def group_running():
-            if sys.platform.startswith("linux"):
-                try:
-                    with os.scandir("/proc") as entries:
-                        for entry in entries:
-                            if not entry.name.isdecimal():
-                                continue
-                            try:
-                                with open(entry.path + "/stat", encoding="ascii") as source:
-                                    fields = source.read().rsplit(")", 1)[1].split()
-                                if int(fields[2]) == pid and fields[0] not in ("Z", "X", "x"):
-                                    return True
-                            except FileNotFoundError:
-                                continue
-                            except (PermissionError, OSError, ValueError, IndexError):
-                                return None
-                except OSError:
-                    return None
-                return False
-            try:
-                probe = subprocess.run(
-                    ("ps", "-e", "-o", "pgid=,stat="),
-                    capture_output=True, text=True, check=True,
-                    env={**os.environ, "LC_ALL": "C"},
-                )
-                for line in probe.stdout.splitlines():
-                    fields = line.split()
-                    if len(fields) >= 2 and fields[0].isdigit() and int(fields[0]) == pid and fields[1][0] not in ("Z", "X"):
-                        return True
-                return False
-            except (OSError, subprocess.CalledProcessError):
-                return None
-
-        if parts[0] == "direct":
-            if not sys.platform.startswith("linux"):
-                return reply("unknown", "Linux process identity cannot be verified on this host")
-            try:
-                start = int(parts[2])
-                from uuid import UUID
-                boot = str(UUID(parts[3]))
-                if start < 0 or boot != parts[3]:
-                    raise ValueError("Invalid process identity")
-            except (TypeError, ValueError, OverflowError):
-                return reply("unknown", "Invalid direct process identity")
-            try:
-                with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as source:
-                    current_boot = source.read().strip()
-            except OSError as exc:
-                return reply("unknown", f"Cannot verify kernel boot: {exc}")
-            if current_boot != boot:
-                return reply("finished", "Process belongs to an earlier boot; exit code unavailable")
-            try:
-                with open(f"/proc/{pid}/stat", encoding="ascii") as source:
-                    fields = source.read().rsplit(")", 1)[1].split()
-                if int(fields[19]) != start:
-                    # A reused PID must never be mistaken for the original job.
-                    return reply("finished", "Original process identity ended; exit code unavailable")
-                if int(fields[2]) != pid or int(fields[3]) != pid:
-                    return reply("unknown", "Original process group cannot be verified")
-                running = fields[0] not in ("Z", "X", "x")
-            except FileNotFoundError:
-                running = False
-            except (OSError, ValueError, IndexError) as exc:
-                return reply("unknown", f"Cannot verify process identity: {exc}")
-        else:
-            if sys.platform.startswith("linux"):
-                return reply("unknown", "Non-Linux process identity cannot be verified on this host")
-            try:
-                probe = subprocess.run(
-                    ("ps", "-p", str(pid), "-o", "lstart=", "-o", "stat="),
-                    capture_output=True, text=True,
-                    env={**os.environ, "LC_ALL": "C"},
-                )
-            except OSError as exc:
-                return reply("unknown", f"Cannot inspect process identity: {exc}")
-            if probe.returncode not in (0, 1):
-                return reply("unknown", probe.stderr.strip() or "Process query failed")
-            fields = probe.stdout.split()
-            if parts[3] != str(pid):
-                return reply("unknown", "Invalid process group identity")
-            if fields and "_".join(fields[:-1]).replace(":", "-") != parts[2]:
-                return reply("finished", "Original process identity ended; exit code unavailable")
-            running = bool(fields) and fields[-1][0] not in ("Z", "X")
-
-        if running:
-            return reply("running")
-        members = group_running()
-        if members is True:
-            return reply("running")
-        if members is None:
-            return reply("unknown", "Cannot verify surviving process-group members")
-        return reply("finished", "Process ended; exit code unavailable")
+        """Observe termination of the whole job, without asserting success."""
+        state, error = observe_process(remote_id)
+        return {"state": state, "return_code": None,
+                "failure_phase": None, "error": error}
 
     @staticmethod
+    @depends_on(observe_process)
     async def follow(
         remote_id, stdout, stderr, *,
         stdout_offset=0, stderr_offset=0, poll_interval=0.2,
@@ -161,10 +52,6 @@ class DirectBackend(Backend, DirectOperations):
         import asyncio
         import inspect
         import os
-        import subprocess
-        import sys
-        from uuid import UUID
-
         if type(poll_interval) not in (int, float) or not 0.05 <= poll_interval <= 10:
             raise ValueError("Invalid follow interval")
         offsets = {"out": stdout_offset, "err": stderr_offset}
@@ -176,98 +63,6 @@ class DirectBackend(Backend, DirectOperations):
         if paths["out"] is not None and paths["out"] == paths["err"]:
             # Independent offsets cannot reconstruct an interleaved file.
             paths["err"] = None
-
-        def group_running(pid):
-            """A process group can outlive its original session leader."""
-            if sys.platform.startswith("linux"):
-                try:
-                    with os.scandir("/proc") as entries:
-                        for entry in entries:
-                            if not entry.name.isdecimal():
-                                continue
-                            try:
-                                with open(entry.path + "/stat", encoding="ascii") as source:
-                                    fields = source.read().rsplit(")", 1)[1].split()
-                                if int(fields[2]) == pid and fields[0] not in ("Z", "X", "x"):
-                                    return True
-                            except FileNotFoundError:
-                                continue
-                            except (PermissionError, OSError, ValueError, IndexError):
-                                return None
-                except OSError:
-                    return None
-                return False
-            try:
-                probe = subprocess.run(
-                    ("ps", "-e", "-o", "pgid=,stat="),
-                    capture_output=True, text=True, check=True,
-                    env={**os.environ, "LC_ALL": "C"},
-                )
-                for line in probe.stdout.splitlines():
-                    fields = line.split()
-                    if (len(fields) >= 2 and fields[0].isdigit()
-                            and int(fields[0]) == pid and fields[1][0] not in ("Z", "X")):
-                        return True
-                return False
-            except (OSError, subprocess.CalledProcessError):
-                return None
-
-        def process_state():
-            """Respect boot identity, PID reuse and surviving group members."""
-            parts = remote_id.split(":") if isinstance(remote_id, str) else ()
-            if len(parts) != 4 or parts[0] not in ("direct", "ps"):
-                return "unknown"
-            try:
-                pid = int(parts[1])
-                if pid <= 0:
-                    return "unknown"
-            except (ValueError, TypeError):
-                return "unknown"
-            if parts[0] == "direct":
-                if not sys.platform.startswith("linux"):
-                    return "unknown"
-                try:
-                    start = int(parts[2])
-                    boot = str(UUID(parts[3]))
-                    if start < 0 or boot != parts[3]:
-                        return "unknown"
-                    with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as source:
-                        current_boot = source.read().strip()
-                    if current_boot != boot:
-                        return "finished"
-                    try:
-                        with open(f"/proc/{pid}/stat", encoding="ascii") as source:
-                            fields = source.read().rsplit(")", 1)[1].split()
-                        if int(fields[19]) != start:
-                            return "finished"
-                        if int(fields[2]) != pid or int(fields[3]) != pid:
-                            return "unknown"
-                        if fields[0] not in ("Z", "X", "x"):
-                            return "running"
-                    except FileNotFoundError:
-                        pass  # The process group may outlive the leader.
-                except (OSError, ValueError, TypeError, OverflowError, IndexError):
-                    return "unknown"
-            else:
-                if sys.platform.startswith("linux"):
-                    return "unknown"
-                try:
-                    probe = subprocess.run(
-                        ("ps", "-p", str(pid), "-o", "lstart=", "-o", "stat="),
-                        capture_output=True, text=True,
-                        env={**os.environ, "LC_ALL": "C"},
-                    )
-                    if probe.returncode not in (0, 1) or parts[3] != str(pid):
-                        return "unknown"
-                    fields = probe.stdout.split()
-                    if fields and "_".join(fields[:-1]).replace(":", "-") != parts[2]:
-                        return "finished"
-                    if fields and fields[-1][0] not in ("Z", "X"):
-                        return "running"
-                except (OSError, IndexError):
-                    return "unknown"
-            alive = group_running(pid)
-            return "running" if alive is True else "finished" if alive is False else "unknown"
 
         async def copy_available():
             copied = False
@@ -296,7 +91,7 @@ class DirectBackend(Backend, DirectOperations):
 
         while True:
             copied = await copy_available()
-            if process_state() == "finished":
+            if observe_process(remote_id)[0] == "finished":
                 while await copy_available():
                     pass  # Deliver final bytes already on disk.
                 return {"state": "finished", "return_code": None,
@@ -306,6 +101,7 @@ class DirectBackend(Backend, DirectOperations):
                 await asyncio.sleep(poll_interval)
 
     @staticmethod
+    @depends_on(observe_process)
     def cancel(remote_id: str, *, timeout: float = 1.0):
         """Signal the original direct process group using a verified Linux identity.
 
@@ -343,38 +139,8 @@ class DirectBackend(Backend, DirectOperations):
                 "error": message,
             }
 
-        def observe():
-            try:
-                with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as source:
-                    current_boot = source.read().strip()
-            except OSError as exc:
-                return "unknown", f"Cannot verify kernel boot identity: {exc}"
-            if current_boot != boot:
-                return "gone", None
-            try:
-                with open(f"/proc/{pid}/stat", encoding="ascii") as source:
-                    data = source.read()
-            except FileNotFoundError:
-                return "gone", None
-            except OSError as exc:
-                return "unknown", f"Cannot verify process identity: {exc}"
-            try:
-                fields = data.rsplit(")", 1)[1].split()
-                state, pgrp, session, start_ticks = (
-                    fields[0], int(fields[2]), int(fields[3]), int(fields[19])
-                )
-            except (IndexError, ValueError) as exc:
-                return "unknown", f"Cannot parse Linux process identity: {exc}"
-            if start_ticks != started:
-                return "gone", None  # The PID was reused; never signal it.
-            if state in ("Z", "X", "x"):
-                return "gone", None
-            if pgrp != pid or session != pid:
-                return "unknown", "Saved PID does not identify its original session leader"
-            return "running", None
-
-        current, error = observe()
-        if current == "gone":
+        current, error = observe_process(remote_id)
+        if current == "finished":
             return reply("finished", "The original process is no longer running; exit status unavailable")
         if current != "running":
             return reply("unknown", error)
@@ -384,26 +150,29 @@ class DirectBackend(Backend, DirectOperations):
         except ProcessLookupError:
             return reply("finished", "Process exited before cancellation; exit status unavailable")
 
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            current, error = observe()
-            if current != "running":
-                break
-            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
-        else:
-            current, error = observe()
+        def wait_for_exit(duration):
+            deadline = time.monotonic() + duration
+            while True:
+                current, error = observe_process(remote_id)
+                remaining = deadline - time.monotonic()
+                if current != "running" or remaining <= 0:
+                    return current, error
+                time.sleep(min(0.05, remaining))
+
+        current, error = wait_for_exit(timeout)
 
         if current == "running":
-            # Recheck original identity immediately before escalating. A group
-            # with a reused PID or an unverifiable leader must not be signalled.
+            # Observation also verifies surviving descendants after leader exit.
             try:
                 os.killpg(pid, signal.SIGKILL)
             except ProcessLookupError:
-                current = "gone"
+                current = "finished"
             else:
-                current, error = observe()
+                # SIGKILL delivery is asynchronous too. Confirm termination
+                # before persisting cancellation, with a bounded extra wait.
+                current, error = wait_for_exit(min(1.0, max(0.1, timeout)))
 
-        if current == "gone":
+        if current == "finished":
             return reply("cancelled")
         return reply(
             "running" if current == "running" else "unknown",

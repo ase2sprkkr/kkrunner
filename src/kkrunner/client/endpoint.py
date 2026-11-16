@@ -29,6 +29,8 @@ class EndpointClient:
         from kkrunner.client.transports import LocalTransport
         self.backend = configured_backend(backend, options=backend_options)
         self.transport = LocalTransport() if transport is None else transport
+        if not self.transport.available:
+            raise ValueError(f"Unsupported transport {self.transport.kind!r}; only local history is available")
         self.computer = getattr(self.transport, "host", None)
         self._remote_home_cache = None
 

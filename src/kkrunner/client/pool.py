@@ -39,6 +39,8 @@ class ClientPool:
         require_persistable_transport(transport)
         if isinstance(backend, dict):
             backend = BackendConfig(**backend)
+        if not transport.available or not backend.available:
+            raise ValueError("Unsupported backend or transport; only local history is available")
         return self.get((transport, backend), lambda: EndpointClient.from_config(transport, backend))
 
     def for_profile(self, profile):

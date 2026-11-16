@@ -63,6 +63,47 @@ def _paths_overlap(first, second):
     return any(_path_overlap(a, b) for a in first for b in second)
 
 
+def filesystem_namespace(record):
+    """Identity of the execution filesystem, shared by reservations and cleanup."""
+    transport = record.execution.transport
+    if isinstance(transport, LocalTransport):
+        return ("local",)
+    mapping = record.files.mapping
+    if mapping is not None and mapping.filesystem_id is not None:
+        return ("filesystem", mapping.filesystem_id)
+    if isinstance(transport, SshTransport):
+        return ("ssh", str(transport.host).rsplit("@", 1)[-1].lower())
+    # An unsupported transport must not be mistaken for the local filesystem.
+    return ("unknown",)
+
+
+def referenced_paths(record):
+    """All declared reads and writes on the execution filesystem, including globs."""
+    reads, writes = _manifest_accesses(record)
+    return reads | writes
+
+
+def _possibly_same_filesystem(left, right):
+    first, second = filesystem_namespace(left), filesystem_namespace(right)
+    return first == second or ("unknown",) in (first, second)
+
+
+def file_reference_overlaps(path, reference, *, directory=False):
+    """Whether removing a file/directory would affect a declared reference."""
+    path, reference = os.path.normpath(path), os.path.normpath(reference)
+    if _path_overlap(path, reference):
+        return True
+    if directory and _path_overlap(os.path.join(path, "*"), reference):
+        return True
+    # A declaration can also reference a containing directory (or its glob).
+    parent = os.path.dirname(path)
+    while parent and parent != path:
+        if _path_overlap(parent, reference):
+            return True
+        path, parent = parent, os.path.dirname(parent)
+    return False
+
+
 @dataclass(frozen=True)
 class FileConflict:
     """A conflicting pair of declared file accesses, on one filesystem."""
@@ -101,18 +142,7 @@ def conflicting_files(left: RunRecord, right: RunRecord) -> tuple[FileConflict, 
         _manifest_accesses(right, remote=False),
         "local",
     )
-    def namespace(record):
-        transport = record.execution.transport
-        if isinstance(transport, LocalTransport):
-            return ("local",)
-        mapping = record.files.mapping
-        if mapping is not None and mapping.filesystem_id is not None:
-            return ("filesystem", mapping.filesystem_id)
-        if isinstance(transport, SshTransport):
-            return ("ssh", str(transport.host).rsplit("@", 1)[-1].lower())
-        return ("local",)
-
-    if namespace(left) == namespace(right):
+    if _possibly_same_filesystem(left, right):
         collisions.extend(matches(
             _manifest_accesses(left), _manifest_accesses(right),
             "target",
@@ -133,17 +163,4 @@ def submission_conflicts(left: RunRecord, right: RunRecord) -> bool:
     if overlaps(_manifest_accesses(left, remote=False), _manifest_accesses(right, remote=False)):
         return True
 
-    def namespace(record):
-        transport = record.execution.transport
-        if isinstance(transport, LocalTransport):
-            return "local"
-        mapping = record.files.mapping
-        if mapping is not None and mapping.filesystem_id is not None:
-            return ("filesystem", mapping.filesystem_id)
-        if isinstance(transport, SshTransport):
-            # Connection flags, commands and scheduler choices do not partition
-            # the host's filesystem. Host aliases/shared mounts use filesystem_id.
-            return ("ssh", str(transport.host).rsplit("@", 1)[-1].lower())
-        return "local"
-
-    return namespace(left) == namespace(right) and overlaps(_manifest_accesses(left), _manifest_accesses(right))
+    return _possibly_same_filesystem(left, right) and overlaps(_manifest_accesses(left), _manifest_accesses(right))

@@ -66,6 +66,60 @@ def test_direct_backend_cancels_verified_process_group():
             child.wait()
 
 
+@pytest.mark.parametrize("remote", (False, True), ids=("local", "source-delivered"))
+@pytest.mark.parametrize("leader_already_exited", (False, True))
+def test_cancellation_terminates_descendant_ignoring_term(tmp_path, remote, leader_already_exited):
+    """A dead leader must neither confirm cancellation nor prevent escalation."""
+    from kkrunner.client.contracts import Operation
+    from kkrunner.client.transports.rpc import operation_command, operation_payload, operation_result
+
+    descendant = (
+        "import os,signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "print(os.getpid(), flush=True); time.sleep(60)"
+    )
+    leader = subprocess.Popen(
+        [sys.executable, "-c",
+         ("import subprocess,sys,time; "
+         "child=subprocess.Popen([sys.executable, '-c', sys.argv[1]], stdout=subprocess.PIPE); "
+         "print(child.stdout.readline().decode().strip(), flush=True); time.sleep(60)"), descendant],
+        start_new_session=True, stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        descendant_pid = int(leader.stdout.readline())
+        identity = _identity(leader.pid)
+        if leader_already_exited:
+            leader.terminate()
+            leader.wait(timeout=5)
+        assert DirectBackend.status(identity)["state"] == "running"
+        if remote:
+            command = operation_command(Operation.for_backend(DirectBackend, "cancel"),
+                                        python=(sys.executable, "-I", "-S"))
+            reply = subprocess.run(command, input=operation_payload((identity,), {"timeout": 0.05}),
+                                   capture_output=True, text=True, check=True, cwd=tmp_path, timeout=5)
+            outcome = operation_result(reply.stdout)
+        else:
+            outcome = DirectBackend.cancel(identity, timeout=0.05)
+        assert outcome["state"] in ("cancelled", "running")
+        deadline = time.monotonic() + 5
+        while DirectBackend.status(identity)["state"] == "running" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert DirectBackend.status(identity)["state"] == "finished"
+        try:
+            with open(f"/proc/{descendant_pid}/stat") as source:
+                state = source.read().rsplit(")", 1)[1].split()[0]
+        except FileNotFoundError:
+            pass
+        else:
+            assert state in ("Z", "X", "x")
+    finally:
+        try:
+            os.killpg(leader.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        leader.wait(timeout=5)
+        leader.stdout.close()
+
+
 def test_direct_cancel_does_not_signal_reused_pid(tmp_path, monkeypatch):
     child = _start_child()
     try:

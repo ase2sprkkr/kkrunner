@@ -1,3 +1,16 @@
+def depends_on(*functions):
+    """Declare function sources needed when this function is delivered remotely.
+
+    Dependencies must be top-level functions, referenced by their own names.
+    Local execution is unchanged. Source delivery validates the complete graph
+    and rejects undeclared globals rather than copying a module namespace.
+    """
+    def decorate(function):
+        function.__source_dependencies__ = tuple(functions)
+        return function
+    return decorate
+
+
 class class_property:
     """
     Decorator that converts a method with a single cls argument into a property

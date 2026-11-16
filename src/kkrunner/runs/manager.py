@@ -309,7 +309,7 @@ class RunManager:
 
     def recover_submitting(self, record):
         record = self.store.get(record.id)
-        if not self._is_stale_submitting(record):
+        if not record.execution.available or not self._is_stale_submitting(record):
             return record
         client = self.client_for(record)
         if not hasattr(client, "recover_submission"):
@@ -400,11 +400,13 @@ class RunManager:
                 stale = tuple(
                     conflict
                     for conflict in conflicts
-                    if conflict.id not in attempted_recovery and self._is_stale_submitting(conflict)
+                    if conflict.id not in attempted_recovery and conflict.execution.available
+                    and self._is_stale_submitting(conflict)
                 )
                 refreshable = tuple(
                     conflict for conflict in conflicts
                     if conflict.id not in attempted_refresh
+                    and conflict.execution.available
                     and conflict.execution.backend.name == "direct"
                     and conflict.execution.backend_id is not None
                 )
@@ -443,6 +445,16 @@ class RunManager:
         if latest.state.is_terminal or latest.state == RunState.POSTPROCESSING:
             return latest
         record = latest
+        if status.return_code is None and record.return_code is not None:
+            # Process liveness is weaker evidence than an already known exit
+            # status (e.g. while result retrieval is pending after a failure).
+            failed = status.state == RunState.FINISHED and record.return_code != 0
+            status = replace(
+                status, return_code=record.return_code,
+                state=RunState.FAILED if failed else status.state,
+                failure_phase=(record.failure_phase or FailurePhase.EXECUTION)
+                if failed else status.failure_phase,
+            )
         if (
             isinstance(record.execution.transport, LocalTransport)
             and status.state.is_terminal and status.files is None
@@ -817,6 +829,8 @@ class RunManager:
         current = {record.id: record for record in records}
         groups = {}
         for record in records:
+            if not record.execution.available:
+                continue  # Browsable history; no supported target implementation.
             if record.execution.backend_id is None and self._is_stale_submitting(record):
                 record = self.recover_submitting(record)
                 current[record.id] = record

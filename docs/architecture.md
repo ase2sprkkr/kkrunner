@@ -353,7 +353,8 @@ live in `client.contracts`. `Operation` in that module describes which backend
 method or standalone function to call. `client.transports.rpc` owns the
 JSON/streaming bootstrap, argument encoding and reply/error decoding together.
 `client.transports.source` checks
-and extracts the selected function's source when building a remote command;
+and extracts the selected function's source and its explicit `@depends_on`
+dependencies when building a remote command;
 local operation references do not require source delivery.
 `backends.contracts.decode_job_status` decodes native replies for both live
 backend bindings and endpoint-wide queries. `RunStatus.from_job_status` only

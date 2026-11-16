@@ -11,8 +11,18 @@ class BackendConfig:
 
     def __post_init__(self):
         from kkrunner.backends import backend_class
-        backend = backend_class(self.name)(**dict(self.options))
-        object.__setattr__(self, "options", tuple(sorted(backend.options.items())))
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("Backend name must be a nonempty string")
+        options = dict(self.options)
+        if self.available:
+            options = backend_class(self.name)(**options).options
+        object.__setattr__(self, "options", tuple(sorted(options.items())))
+
+    @property
+    def available(self):
+        """Unknown implementations remain readable history, but cannot execute."""
+        from kkrunner.backends import available_backend_names
+        return self.name in available_backend_names()
 
     def create(self):
         from kkrunner.backends import backend_class

@@ -175,7 +175,7 @@ class RunFiles:
             raise RuntimeError(f"Run {record.id} is not finished")
 
         missing = _missing_result_files(record.files)
-        if not missing or record.execution.backend_id is None:
+        if not missing or record.execution.backend_id is None or not record.execution.available:
             return record
 
         client = self._client_for(record)

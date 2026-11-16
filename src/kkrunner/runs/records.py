@@ -189,9 +189,11 @@ class RunStore:
         durable_mkdir(self.directory, parents=True, exist_ok=True, mode=0o700)
         path = self._path(record)
         durable_mkdir(path.parent, parents=True, exist_ok=True, mode=0o700)
+        data = asdict(record)
+        data["execution"]["transport"] = record.execution.transport.to_dict()
         durable_write_json(
             path,
-            asdict(record),
+            data,
             mode=0o600,
             sort_keys=True,
             default=self._json_default,

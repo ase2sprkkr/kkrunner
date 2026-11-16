@@ -1,4 +1,4 @@
-"""Validate and extract one self-contained function for source delivery."""
+"""Validate and extract explicit function dependencies for source delivery."""
 
 from __future__ import annotations
 
@@ -10,6 +10,47 @@ import types
 
 
 def function_definition(fn, *, static=False, name=None):
+    """Extract a function and its explicitly declared source dependencies.
+
+    Each dependency is emitted once, before its users. Cycles, ambiguous names
+    and undeclared globals are errors. No module namespace is copied.
+    """
+    emitted = {}
+    visiting = set()
+    definitions = []
+
+    def visit(function, *, static=False, name=None):
+        if not inspect.isfunction(function):
+            raise TypeError("Remote operation must be a top-level Python function")
+        binding = name or function.__name__
+        if function in visiting:
+            raise TypeError("Cyclic remote source dependencies")
+        if binding in emitted:
+            if emitted[binding] is not function:
+                raise TypeError(f"Conflicting remote dependency name: {binding}")
+            return
+        emitted[binding] = function
+        dependencies = getattr(function, "__source_dependencies__", ())
+        bindings = {}
+        visiting.add(function)
+        for dependency in dependencies:
+            if not inspect.isfunction(dependency):
+                raise TypeError("Remote source dependencies must be Python functions")
+            dependency_name = dependency.__name__
+            if function.__globals__.get(dependency_name) is not dependency:
+                raise TypeError(f"Dependency must be bound as {dependency_name}")
+            bindings[dependency_name] = dependency
+            visit(dependency)
+        definitions.append((function, static, name, bindings))
+        visiting.remove(function)
+
+    visit(fn, static=static, name=name)
+    return "".join(_function_definition(
+        function, static=static, name=name, dependencies=bindings, namespace_names=emitted,
+    ) for function, static, name, bindings in definitions)
+
+
+def _function_definition(fn, *, static=False, name=None, dependencies, namespace_names):
     """Extract one function, checking its explicit dependencies.
 
     Functions may import only target-available modules inside their own body.
@@ -40,15 +81,21 @@ def function_definition(fn, *, static=False, name=None):
 
     # Attribute names and function-local imports are not global references.
     # Walk nested code too: a callback may hide a dependency on the client.
-    if any(name in fn.__globals__ for name in globals_used(fn.__code__)):
+    if any((name in fn.__globals__ or name in namespace_names) and name not in dependencies
+           for name in globals_used(fn.__code__)):
         raise TypeError("Remote operation must not depend on module globals or closures")
     source = textwrap.dedent(getattr(fn, "__source__", None) or inspect.getsource(fn))
     node = ast.parse(source).body[0]
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         raise TypeError("Remote operation must be a Python function")
-    if static and len(node.decorator_list) == 1 and isinstance(node.decorator_list[0], ast.Name):
-        if node.decorator_list[0].id == "staticmethod":
-            node.decorator_list = []
+    node.decorator_list = [
+        decorator for decorator in node.decorator_list
+        if not (
+            static and isinstance(decorator, ast.Name) and decorator.id == "staticmethod"
+            or hasattr(fn, "__source_dependencies__") and isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Name) and decorator.func.id == "depends_on"
+        )
+    ]
     if node.decorator_list:
         raise TypeError("Remote operation must be an undecorated function")
     # Type annotations describe the client API, not dependencies of the target

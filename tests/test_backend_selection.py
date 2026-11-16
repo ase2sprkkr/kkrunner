@@ -34,8 +34,10 @@ def test_removed_process_backend_name_is_rejected():
 
     with pytest.raises(ValueError, match="Unsupported"):
         backend_class("process")
+    saved = BackendConfig("process")
+    assert not saved.available
     with pytest.raises(ValueError, match="Unsupported"):
-        BackendConfig("process")
+        saved.create()
     with pytest.raises(ValueError, match="installed agent"):
         _backend_for_kind("process")
 

@@ -21,17 +21,18 @@ def __dir__():
 
 
 def require_persistable_transport(transport):
-    """Reject extensions whose behavior cannot be reconstructed from a record."""
+    """Accept built-in transports and read-only unsupported transport settings."""
     from .local import LocalTransport
     from .ssh import SshTransport
+    from .unavailable import UnavailableTransport
 
-    if type(transport) not in (LocalTransport, SshTransport):
+    if type(transport) not in (LocalTransport, SshTransport, UnavailableTransport):
         raise TypeError("Persistent runs require a supported LocalTransport or SshTransport")
     return transport
 
 
 def transport_from_dict(value):
-    """Reconstruct a whitelisted transport; never import stored class paths."""
+    """Decode settings without importing stored class paths or enabling unknown kinds."""
     kind = value.get("kind")
     if kind == "local":
         from .local import LocalTransport
@@ -39,4 +40,7 @@ def transport_from_dict(value):
     if kind == "ssh":
         from .ssh import SshTransport
         return SshTransport(**value)
+    if isinstance(kind, str) and kind:
+        from .unavailable import UnavailableTransport
+        return UnavailableTransport(value)
     raise ValueError(f"Unknown transport kind: {kind!r}")

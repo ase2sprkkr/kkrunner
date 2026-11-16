@@ -74,6 +74,26 @@ host. Direct SSH is deliberately independent and sends the compact worker
 source. Calculation stream FOLLOW uses framed data to distinguish native
 stdout/stderr from SSH diagnostics and delivers a terminal receipt.
 
+Portable functions may share other top-level functions by declaring them with
+``@depends_on`` from ``kkrunner.support.decorators``::
+
+    def observe_process(identity):
+        # Imports needed on the target belong inside the function body.
+        ...
+
+    @staticmethod
+    @depends_on(observe_process)
+    def status(identity):
+        return observe_process(identity)
+
+Local calls use the original functions directly. SSH includes each declared
+dependency once, including transitive dependencies. Functions must refer to
+dependencies by their original names. Closures, undeclared module globals,
+cycles and conflicting names are rejected before starting the remote call.
+Only these explicitly selected sources are transferred; target-side imports
+must still be available on the target. Direct status, FOLLOW and cancellation
+share the same process-group observation in this way.
+
 Direct SSH execution
 --------------------
 

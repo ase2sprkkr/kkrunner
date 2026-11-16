@@ -98,6 +98,19 @@ when needed, then ``postprocessing`` when required, then ``finished``.
 ``failed`` and ``cancelled`` are terminal. ``unknown`` means observation is
 uncertain; it is not evidence that the backend stopped.
 
+A verified direct-process termination can have no recoverable OS exit code.
+``finished`` with ``return_code=None`` therefore does not assert exit code zero.
+An already known exit code is retained when a later observation only establishes
+liveness. Application readers may still parse historical OUT files without a
+known OS outcome.
+
+Unknown backend names and transport kinds remain readable execution metadata.
+Their local files and captured versions can be browsed, but target operations
+are unavailable until a supported implementation is supplied. Refresh leaves
+these records unchanged, and nonterminal records retain their file reservations.
+Malformed records still raise ``CorruptRunRecord`` by default; an explicit
+``on_error`` handler may report and skip them in history viewers.
+
 * ``run.stop_observation()`` detaches this observer without cancelling execution.
 * ``run.cancel()`` requests backend cancellation.
 * ``manager.refresh()`` reconciles backend facts and durable terminal receipts.

@@ -28,6 +28,7 @@ class Transport:
     """
 
     is_local = False
+    available = True
 
     def to_dict(self):
         """Return the immutable connection settings used for persistence."""

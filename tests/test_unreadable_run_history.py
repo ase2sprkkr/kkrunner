@@ -18,25 +18,25 @@ def _record(manager, tmp_path, run_id):
     return record
 
 
-def _obsolete_backend(store, record):
+def _corrupt_state(store, record):
     path = store._path(record)
     data = json.loads(path.read_text())
-    data["execution"]["backend"]["name"] = "process"
+    data["state"] = "invalid-state"
     path.write_text(json.dumps(data))
     return path
 
 
-def test_history_can_report_and_skip_an_unsupported_backend(tmp_path):
+def test_history_can_report_and_skip_a_corrupt_record(tmp_path):
     store = RunStore(tmp_path / "runs")
     manager = RunManager(store)
     good = _record(manager, tmp_path, "good")
     bad = _record(manager, tmp_path, "bad")
-    path = _obsolete_backend(store, bad)
+    path = _corrupt_state(store, bad)
     original = path.read_bytes()
 
-    with pytest.raises(CorruptRunRecord, match="Unsupported backend: 'process'"):
+    with pytest.raises(CorruptRunRecord, match="not a valid RunState"):
         store.runs()
-    with pytest.raises(CorruptRunRecord, match="Unsupported backend: 'process'"):
+    with pytest.raises(CorruptRunRecord, match="not a valid RunState"):
         store.get("bad")
 
     errors = []
@@ -55,7 +55,7 @@ def test_manager_refresh_skips_bad_history_only_when_explicitly_requested(tmp_pa
     manager = RunManager(store)
     good = _record(manager, tmp_path, "good")
     bad = _record(manager, tmp_path, "bad")
-    _obsolete_backend(store, bad)
+    _corrupt_state(store, bad)
 
     with pytest.raises(CorruptRunRecord):
         manager.refresh()
