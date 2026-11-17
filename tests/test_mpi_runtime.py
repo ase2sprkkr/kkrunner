@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import sys
 from dataclasses import asdict, replace
 
 import pytest
@@ -103,14 +104,20 @@ def test_resolver_requires_validated_mpi_spec():
 
 def test_target_prepares_serial_or_parallel_command_without_changing_source(monkeypatch, tmp_path):
     monkeypatch.setenv("SLURM_NODELIST", "node1")
-    monkeypatch.setattr(shutil, "which", lambda name: "/bin/srun" if name == "srun" else None)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    launcher = tmp_path / "srun"
+    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.chmod(0o755)
+    parallel = tmp_path / "parallel-program"
+    parallel.write_text("#!/bin/sh\nexit 0\n")
+    parallel.chmod(0o755)
     spec = ExecutionSpec(
-        ("serial-program",), mpi_argv=("parallel-program", "run.inp"),
+        ("serial-program",), mpi_argv=(str(parallel), "run.inp"),
         mpi=MpiSpec.from_value(16), stdin="run.inp", directory=str(tmp_path),
     )
     request = execution_request(spec)
     outcome = mpi_runtime.prepare_mpi(request)
-    assert outcome["request"]["argv"] == ["srun", "-n", "16", "parallel-program", "run.inp"]
+    assert outcome["request"]["argv"] == ["srun", "-n", "16", str(parallel), "run.inp"]
     assert outcome["request"]["stdin"] == str(tmp_path / "run.inp")
     assert request["argv"] == ["serial-program"]
     assert spec.argv == ("serial-program",)
@@ -129,18 +136,18 @@ def test_required_mpi_without_launcher_fails(monkeypatch, tmp_path):
 def test_auto_mpi_fallback_retains_serial_command_and_warning_policy(monkeypatch, warn):
     monkeypatch.delenv("SLURM_NODELIST", raising=False)
     monkeypatch.setattr(shutil, "which", lambda _: None)
-    spec = ExecutionSpec(("serial",), mpi_argv=("parallel",),
+    spec = ExecutionSpec((sys.executable,), mpi_argv=("parallel",),
                          mpi=MpiSpec.from_value("auto", warning=warn))
     resolved = mpi_runtime.prepare_mpi(execution_request(spec))
-    assert resolved["request"]["argv"] == ["serial"]
+    assert resolved["request"]["argv"] == [sys.executable]
     assert bool(resolved["warning"]) is warn
     if warn:
         assert "without MPI" in resolved["warning"]
 
 
 def test_mpi_stdin_policy_is_explicit_and_serial_fallback_unchanged():
-    spec = ExecutionSpec(("serial",), mpi_argv=("parallel",),
-                         mpi=MpiSpec.from_value(("mpirun",)), stdin="separate.inp")
+    spec = ExecutionSpec(("serial",), mpi_argv=(sys.executable,),
+                         mpi=MpiSpec.from_value((sys.executable,)), stdin="separate.inp")
     with_stdin = mpi_runtime.prepare_mpi(execution_request(spec))
     without_stdin = mpi_runtime.prepare_mpi(execution_request(replace(spec, mpi_uses_stdin=False)))
     assert with_stdin["request"]["stdin"] is not None

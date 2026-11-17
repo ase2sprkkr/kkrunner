@@ -229,6 +229,18 @@ def test_mpi_stdin_can_be_disabled_independently(tmp_path):
     assert native.stdin_path is None
 
 
+def test_scheduler_explicit_launcher_does_not_probe_compute_node_binary(tmp_path):
+    spec = ExecutionSpec(
+        ("serial",), mpi_argv=("/compute-only/programMPI", "input.inp"),
+        mpi=MpiSpec(required=True, launcher=("/compute-only/mpirun",)),
+        directory=str(tmp_path),
+    )
+    job = prepare_job(PSIJ, request_at(tmp_path, spec=spec),
+                      executor_name="slurm", submission_key="run-123")
+    assert job.spec.executable == "/compute-only/mpirun"
+    assert job.spec.arguments == ["/compute-only/programMPI", "input.inp"]
+
+
 @pytest.mark.parametrize("executor_name,launcher", (("slurm", "srun"), ("pbs", "mpirun")))
 def test_scheduler_selection_changes_mpi_launcher(tmp_path, executor_name, launcher):
     spec = ExecutionSpec(

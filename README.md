@@ -26,6 +26,13 @@ outcome = run.run()
 assert outcome.return_code == 0
 ```
 
+Before local or SSH process backends launch a process, they check the selected
+serial or MPI executable on the execution host using its working directory and
+`PATH`. Missing programs and files without execute permission produce explicit
+launch errors instead of relying on MPI's diagnostics. PSI/J does not apply
+this preflight on the submission host, because its filesystem and environment
+can differ from those of the compute nodes.
+
 ## Persistent execution
 
 A `RunManager` records runs in a `RunStore` so a later client can reconnect.

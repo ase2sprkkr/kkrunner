@@ -21,7 +21,9 @@ def prepare_job(psij, request, *, executor_name, submission_key):
     )
     if use_mpi:
         if mpi["launcher"]:
-            argv = prepare_mpi(request)["request"]["argv"]
+            # This builds a future compute-node command. The submission host's
+            # PATH/filesystem cannot establish whether that payload exists.
+            argv = prepare_mpi(request, resolve_only=True)["request"]["argv"]
         else:
             argv = request["mpi_argv"]
             if mpi["process_count"] is not None:

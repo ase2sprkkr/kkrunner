@@ -6,12 +6,45 @@ import os
 import signal
 
 from kkrunner.execution import MpiSpec
-from kkrunner.support.decorators import portable
+from kkrunner.support.decorators import depends_on, portable
 
 
 @portable
+def validate_executable(executable, *, directory=None):
+    """Check a command on its execution host, with subprocess cwd/PATH rules."""
+    import errno
+    import os
+    import shutil
+
+    directory = os.path.abspath(directory or os.curdir)
+    executable = os.fspath(executable)
+    if os.path.dirname(executable):
+        candidates = [os.path.join(directory, executable)]
+    else:
+        search = [os.path.join(directory, entry) for entry in os.get_exec_path()]
+        if shutil.which(executable, path=os.pathsep.join(search)) is not None:
+            return
+        candidates = [os.path.join(entry, executable) for entry in search]
+    for path in candidates:
+        if os.path.exists(path):
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                return
+            raise PermissionError(
+                errno.EACCES,
+                f"Executable is not runnable on execution host (working directory: {directory})",
+                executable,
+            )
+    raise FileNotFoundError(
+        errno.ENOENT,
+        f"Executable not found on execution host (working directory: {directory})",
+        executable,
+    )
+
+
+@portable
+@depends_on(validate_executable)
 def prepare_mpi(request, *, resolve_only=False):
-    """Materialize MPI on the execution host; standalone for source delivery."""
+    """Resolve MPI and check the selected process command on its host."""
     import errno
     import os
     import shutil
@@ -20,6 +53,8 @@ def prepare_mpi(request, *, resolve_only=False):
     result = {"request": prepared, "launcher": None, "warning": None, "use_stdin": True}
     mpi = request.get("mpi") or {}
     if request.get("mpi_argv") is None:
+        if not resolve_only:
+            validate_executable(request["argv"][0], directory=request.get("directory"))
         return result
     launcher = tuple(mpi.get("launcher") or ())
     requested = mpi.get("required") or mpi.get("autodetect") or launcher
@@ -41,7 +76,13 @@ def prepare_mpi(request, *, resolve_only=False):
                 raise FileNotFoundError(errno.ENOENT, "MPI was requested but no MPI launcher was found")
             if mpi.get("autodetect") and mpi.get("warning", True):
                 result["warning"] = "MPI autodetection did not find an MPI launcher; the calculation will run without MPI."
+            validate_executable(request["argv"][0], directory=request.get("directory"))
         return result
+    if not resolve_only:
+        # MPI can hide an exec failure behind launcher-specific diagnostics.
+        # Validate the selected payload before handing it to the launcher.
+        validate_executable(launcher[0], directory=request.get("directory"))
+        validate_executable(request["mpi_argv"][0], directory=request.get("directory"))
     if mpi.get("process_count") is not None:
         option = "-n" if os.path.basename(os.fspath(launcher[0])) == "srun" else "-np"
         launcher = (*launcher, option, str(mpi["process_count"]))

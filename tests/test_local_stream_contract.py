@@ -142,8 +142,10 @@ def test_local_direct_spec_retains_declared_paths_during_execution(tmp_path):
 def test_local_direct_mpi_resolution_does_not_replace_declaration(tmp_path):
     spec = ExecutionSpec(
         argv=("unused-serial",),
-        mpi_argv=("print('from MPI')",),
-        mpi=MpiSpec(required=True, launcher=(sys.executable, "-c")),
+        mpi_argv=(sys.executable, "-c", "print('from MPI')"),
+        mpi=MpiSpec(required=True, launcher=(
+            sys.executable, "-c", "import os,sys; os.execv(sys.argv[1], sys.argv[1:])",
+        )),
         directory=str(tmp_path), output_file=str(tmp_path / "output.txt"),
     )
     run = _run(spec)
