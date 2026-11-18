@@ -59,6 +59,21 @@ file footprint are resolved before reservation; uploads, output opening and
 submission start after reservation. Declare every read, write and cache;
 undeclared executable side effects cannot be protected by file reservations.
 
+By default, the SSH transport pools up to four SSH sessions, each with a
+persistent remote Python interpreter. Portable functions and their transitive
+dependencies are installed once per live interpreter under stable names derived
+from their module and qualified names. The client tracks installed identities;
+the remote side uses ordinary Python globals, without a separate registry.
+Idle interpreters close after 120 seconds. The pool is shared across endpoint
+clients using identical transport settings, irrespective of execution backend.
+The sessions are independent of persistent run records and require only
+Python on the remote machine. Long-lived streaming FOLLOW/execution observers
+and bulk shell-based transfers continue using independent SSH commands; they
+do not consume RPC worker capacity. Set ``pool_size=0`` to use one-shot RPCs,
+or configure ``pool_size`` and ``pool_idle_seconds`` on ``SshTransport``.
+Portable code is immutable for the lifetime of a pool: restart the pool after
+reloading code. Closing the client or transport closes its shared pool.
+
 The SSH transport obtains the selected backend's ``SshHelper`` and transfers
 the selected ``@portable``-marked source and its declared dependencies.
 Direct uses its own method. Supervisor and PSI/J use generated, import-only

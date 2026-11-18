@@ -54,6 +54,10 @@ class SshTransport(Transport):
         return await follow_framed_command(process, on_output)
 
     async def call(self, operation: Operation, *args, **kwargs):
+        if self.pool_size and type(self) is SshTransport:
+            from .sessions import pool_for
+            return await pool_for(self).call(operation, *args, **kwargs)
+        # Custom transport subclasses and pool_size=0 retain one-shot SSH.
         payload = operation_payload(args, kwargs).encode("utf-8")
         command = operation_command(operation, python=self.python_command)
         result = await self.run(command, input=payload)
@@ -69,6 +73,8 @@ class SshTransport(Transport):
     options: Tuple[str, ...] = ()
     zstd: bool = False
     python_command: Tuple[str, ...] = ("python3",)
+    pool_size: int = 4
+    pool_idle_seconds: float = 120.0
     kind: Literal["ssh"] = "ssh"
 
     def __post_init__(self):
@@ -87,6 +93,16 @@ class SshTransport(Transport):
             raise ValueError("SSH python_command must not be empty")
         if type(self.zstd) is not bool:
             raise TypeError("SSH zstd must be bool")
+        if type(self.pool_size) is not int or self.pool_size < 0 or self.pool_size > 64:
+            raise ValueError("SSH pool_size must be between 0 and 64")
+        if (type(self.pool_idle_seconds) not in (float, int)
+                or not 1 <= self.pool_idle_seconds <= 86400):
+            raise ValueError("SSH pool_idle_seconds must be between 1 and 86400")
+
+    def close(self):
+        """Close the shared persistent Python sessions for this SSH profile."""
+        from .sessions import close_pool
+        close_pool(self)
 
     @property
     def _tar_command(self):

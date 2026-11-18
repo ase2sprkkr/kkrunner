@@ -76,6 +76,20 @@ def _validate_portable_graph(function, *, method=False):
         nodes = ast.parse(source).body
         assert len(nodes) == 1 and isinstance(nodes[0], (ast.FunctionDef, ast.AsyncFunctionDef))
         definition = nodes[0]
+        # Generated bindings and remote protocol names are reserved.
+        for node in ast.walk(definition):
+            identifiers = []
+            if isinstance(node, ast.Name):
+                identifiers.append(node.id)
+            if isinstance(node, ast.arg):
+                identifiers.append(node.arg)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                identifiers.append(node.name)
+            if isinstance(node, ast.alias):
+                identifiers.append(node.asname or node.name.split(".")[0])
+            assert not any(value.startswith("_kkrunner_") for value in identifiers), (
+                f"Reserved _kkrunner_ identifier in {fn.__qualname__}"
+            )
         for decorator in definition.decorator_list:
             if isinstance(decorator, ast.Name):
                 assert decorator.id in {"portable", "staticmethod"}, (

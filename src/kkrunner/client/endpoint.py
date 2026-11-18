@@ -34,6 +34,12 @@ class EndpointClient:
         self.computer = getattr(self.transport, "host", None)
         self._remote_home_cache = None
 
+    def close(self):
+        """Release transport resources owned by the configured client."""
+        close = getattr(self.transport, "close", None)
+        if close is not None:
+            close()
+
     @classmethod
     def from_config(cls, transport, backend):
         """Reconstruct a client from supported stored connection/backend data."""

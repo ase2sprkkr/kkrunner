@@ -9,6 +9,8 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
+from functools import lru_cache
+from hashlib import sha256
 
 
 def function_definition(fn, *, static=False, name=None):
@@ -58,3 +60,60 @@ def _function_definition(fn, *, name=None):
     if name is not None:
         node.name = name
     return ast.unparse(node) + "\n"
+
+
+@lru_cache(maxsize=None)
+def portable_bundle(function):
+    """Compile a portable function and its dependencies into stable globals.
+
+    Names depend *only* on module and qualname, not on source or dependencies.
+    The caller must discard its sessions after reloading portable code.
+    Returns (entrypoint, ((name, source), ...)), in dependency order.
+    """
+
+    def symbol(fn):
+        identity = f"{fn.__module__}.{fn.__qualname__}"
+        return "_kkrunner_" + sha256(identity.encode("utf8")).hexdigest()[:24]
+
+    visited = set()
+    visiting = set()
+    order = []
+
+    def visit(fn):
+        if not getattr(fn, "__kkrunner_portable__", False):
+            raise TypeError("Remote operation must be marked with @portable")
+        if fn in visiting:
+            raise TypeError("Cyclic remote source dependencies")
+        if fn in visited:
+            return
+        visiting.add(fn)
+        bindings = set()
+        for dependency in getattr(fn, "__source_dependencies__", ()):
+            if dependency.__name__ in bindings:
+                raise TypeError(f"Duplicate remote dependency name: {dependency.__name__}")
+            bindings.add(dependency.__name__)
+            visit(dependency)
+        visiting.remove(fn)
+        visited.add(fn)
+        order.append(fn)
+
+    visit(function)
+    definitions = []
+    for fn in order:
+        source = _function_definition(fn, name=symbol(fn))
+        node = ast.parse(source).body[0]
+        aliases = [
+            ast.Assign(
+                targets=[ast.Name(id=dep.__name__, ctx=ast.Store())],
+                value=ast.Name(id=symbol(dep), ctx=ast.Load()),
+            )
+            for dep in getattr(fn, "__source_dependencies__", ())
+        ]
+        # Preserve the function docstring at the beginning of its body.
+        index = int(bool(node.body and isinstance(node.body[0], ast.Expr)
+                         and isinstance(node.body[0].value, ast.Constant)
+                         and isinstance(node.body[0].value.value, str)))
+        node.body[index:index] = aliases
+        ast.fix_missing_locations(node)
+        definitions.append((symbol(fn), ast.unparse(node) + "\n"))
+    return symbol(function), tuple(definitions)
